@@ -7,6 +7,10 @@
 
 namespace Shirayuki {
 
+static constexpr size_t kPointerScanChunkSize = 1024 * 1024; // 1MB per read chunk
+static constexpr size_t kPointerScanMaxRawResults = 10000;   // cap per findPointersTo
+static constexpr uintptr_t kModuleMaxSize = 0x10000000;      // 256MB per module heuristic
+
 uintptr_t PointerChain::resolve() const {
     ImageInfo img = Image::find(moduleName);
     if (!img.isValid())
@@ -56,9 +60,8 @@ std::vector<uintptr_t> PointerScanner::findPointersTo(uintptr_t targetAddress, i
         if (region.size < sizeof(uintptr_t))
             continue;
 
-        const size_t chunkSize = 1024 * 1024; // 1MB chunks
-        for (size_t off = 0; off < region.size; off += chunkSize) {
-            size_t readLen = std::min(chunkSize, region.size - off);
+        for (size_t off = 0; off < region.size; off += kPointerScanChunkSize) {
+            size_t readLen = std::min(kPointerScanChunkSize, region.size - off);
             std::vector<uint8_t> buf(readLen);
 
             if (Memory::read(region.start + off, buf.data(), readLen) != Status::Success) {
@@ -75,7 +78,7 @@ std::vector<uintptr_t> PointerScanner::findPointersTo(uintptr_t targetAddress, i
             }
         }
 
-        if (results.size() >= 10000)
+        if (results.size() >= kPointerScanMaxRawResults)
             break;
     }
 
@@ -118,7 +121,7 @@ static void scanRecursive(ScanContext &ctx, uintptr_t target, std::deque<int64_t
 
         // Check if this pointer is in a known module
         for (auto &img : ctx.images) {
-            if (ptrAddr >= img.base && ptrAddr < img.base + 0x10000000) {
+            if (ptrAddr >= img.base && ptrAddr < img.base + kModuleMaxSize) {
                 PointerChain chain;
                 chain.moduleName = img.name;
                 chain.moduleOffset = ptrAddr - img.base;
@@ -151,7 +154,7 @@ std::vector<PointerChain> PointerScanner::scan(const PointerScanConfig &config) 
 
     // Check if target itself is directly in a module
     for (auto &img : images) {
-        if (config.targetAddress >= img.base && config.targetAddress < img.base + 0x10000000) {
+        if (config.targetAddress >= img.base && config.targetAddress < img.base + kModuleMaxSize) {
             PointerChain direct;
             direct.moduleName = img.name;
             direct.moduleOffset = config.targetAddress - img.base;
