@@ -25,7 +25,7 @@ Shirayuki_FILES = Tweak/Tweak.xm \
 	GUI/Handlers/SYPointerHandler.mm \
 	GUI/Handlers/SYDumpHandler.mm
 
-Shirayuki_CFLAGS = -fobjc-arc -std=c++17 \
+Shirayuki_CFLAGS = -fobjc-arc \
 	-I$(THEOS_PROJECT_DIR)/ShirayukiMemory \
 	-I$(THEOS_PROJECT_DIR)/GUI \
 	-I$(THEOS_PROJECT_DIR)/GUI/Handlers
