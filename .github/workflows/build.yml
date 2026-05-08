@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main, dev]
 
+permissions:
+  pull-requests: write
+
 jobs:
   build:
     runs-on: macos-latest
@@ -46,12 +49,76 @@ jobs:
       - name: Install ldid
         run: brew install ldid
 
+      - name: Compute version
+        id: ver
+        run: |
+          BASE=$(grep '^Version:' layout/DEBIAN/control | awk '{print $2}')
+          SHORT="${GITHUB_SHA:0:7}"
+          BRANCH="${GITHUB_REF_NAME//\//-}"
+          BUILD=$(git rev-list --count HEAD)
+          if [[ "$GITHUB_REF_NAME" == "main" ]]; then
+            VER="$BASE"
+          else
+            VER="${BASE}-dev.${BUILD}+${SHORT}"
+          fi
+          sed -i '' "s/^Version: .*/Version: $VER/" layout/DEBIAN/control
+          echo "ver=$VER" >> $GITHUB_OUTPUT
+          echo "artifact=shirayuki-${BRANCH}-${SHORT}" >> $GITHUB_OUTPUT
+
       - name: Build
-        run: make clean && make
+        id: build
+        run: make clean && make package
 
       - name: Upload .deb
-        if: success()
+        if: steps.build.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
-          name: shirayuki-deb
+          name: ${{ steps.ver.outputs.artifact }}
           path: packages/*.deb
+
+      - name: Comment on PR
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const success = '${{ steps.build.outcome }}' === 'success';
+            const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const ver = '${{ steps.ver.outputs.ver }}';
+            const artifact = '${{ steps.ver.outputs.artifact }}';
+            const sha = context.sha.slice(0, 7);
+            const branch = context.payload.pull_request.head.ref;
+            const commitUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${context.sha}`;
+
+            const body = success ? `
+            ## 🏗️ Build Report
+
+            | | |
+            |---|---|
+            | **Status** | ✅ Succeeded |
+            | **Version** | \`${ver}\` |
+            | **Branch** | \`${branch}\` |
+            | **Commit** | [\`${sha}\`](${commitUrl}) |
+
+            ### 📦 Install
+            > [Download \`.deb\`](${runUrl}) — Actions → Artifacts → \`${artifact}\`
+            \`\`\`sh
+            dpkg -i ${artifact}.deb && killall -9 SpringBoard
+            \`\`\`
+            ` : `
+            ## 🏗️ Build Report
+
+            | | |
+            |---|---|
+            | **Status** | ❌ Failed |
+            | **Branch** | \`${branch}\` |
+            | **Commit** | [\`${sha}\`](${commitUrl}) |
+
+            ### 🔍 [View build logs](${runUrl})
+            `;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body.replace(/^            /gm, ''),
+            });
