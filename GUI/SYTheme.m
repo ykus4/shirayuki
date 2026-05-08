@@ -67,9 +67,15 @@
 }
 
 // --- Radius ---
-+ (CGFloat)radiusSmall { return 6.0; }
-+ (CGFloat)radiusMedium { return 10.0; }
-+ (CGFloat)radiusLarge { return 16.0; }
++ (CGFloat)radiusSmall {
+    return 6.0;
+}
++ (CGFloat)radiusMedium {
+    return 10.0;
+}
++ (CGFloat)radiusLarge {
+    return 16.0;
+}
 
 // --- SF Symbols ---
 + (UIImage *)icon:(NSString *)name {
@@ -81,8 +87,9 @@
 }
 
 + (UIImage *)icon:(NSString *)name size:(CGFloat)size color:(UIColor *)color {
-    UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration
-        configurationWithPointSize:size weight:UIImageSymbolWeightMedium];
+    UIImageSymbolConfiguration *config =
+        [UIImageSymbolConfiguration configurationWithPointSize:size
+                                                        weight:UIImageSymbolWeightMedium];
     UIImage *img = [UIImage systemImageNamed:name withConfiguration:config];
     return [img imageWithTintColor:color renderingMode:UIImageRenderingModeAlwaysOriginal];
 }

@@ -1,5 +1,5 @@
-#import <UIKit/UIKit.h>
 #import "SYTabHandler.h"
+#import <UIKit/UIKit.h>
 
 @class ShirayukiViewController;
 
@@ -9,6 +9,7 @@
 @property (nonatomic, assign) BOOL hasResults;
 @property (nonatomic, assign) BOOL isNarrowing;
 
+- (NSString *)shortType;
 - (void)cycleType;
 - (void)narrow:(NSString *)mode; // "changed","unchanged","increased","decreased","exact"
 - (void)batchModify:(NSString *)value;

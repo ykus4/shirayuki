@@ -1,5 +1,14 @@
 # shirayuki
 
+<p align="center">
+  <img src="assets/icon.png" width="320" alt="shirayuki icon" />
+</p>
+
+<p align="center">
+  <img src="https://github.com/ykus4/shirayuki/actions/workflows/build.yml/badge.svg" alt="Build" />
+  <img src="https://github.com/ykus4/shirayuki/actions/workflows/format.yml/badge.svg" alt="Format Check" />
+</p>
+
 KittyMemory-inspired memory toolkit for jailbroken iOS. Theos tweak with in-app overlay GUI.
 
 ---
@@ -141,9 +150,19 @@ SessionManager::save(session, SessionManager::autoSavePath("com.example.app"));
 
 ## Requirements
 
-- Jailbroken iOS 15.0+ (arm64)
+- Jailbroken iOS 15.0–16.x (arm64)
 - [Theos](https://theos.dev)
 - Substrate or Substitute
+
+## Development
+
+```bash
+# Format all source files
+make fmt
+
+# Check formatting (CI uses this)
+make fmt-check
+```
 
 ---
 

@@ -3,7 +3,8 @@
 
 @implementation SYResultCell
 
-- (instancetype)initWithStyle:(UITableViewCellStyle)style reuseIdentifier:(NSString *)reuseIdentifier {
+- (instancetype)initWithStyle:(UITableViewCellStyle)style
+              reuseIdentifier:(NSString *)reuseIdentifier {
     self = [super initWithStyle:style reuseIdentifier:reuseIdentifier];
     if (self) {
         self.backgroundColor = [UIColor clearColor];
@@ -44,9 +45,12 @@
         [NSLayoutConstraint activateConstraints:@[
             // Card
             [_cardView.topAnchor constraintEqualToAnchor:self.contentView.topAnchor constant:2],
-            [_cardView.bottomAnchor constraintEqualToAnchor:self.contentView.bottomAnchor constant:-2],
-            [_cardView.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor constant:8],
-            [_cardView.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor constant:-8],
+            [_cardView.bottomAnchor constraintEqualToAnchor:self.contentView.bottomAnchor
+                                                   constant:-2],
+            [_cardView.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor
+                                                    constant:8],
+            [_cardView.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor
+                                                     constant:-8],
 
             // Icon
             [_iconView.leadingAnchor constraintEqualToAnchor:_cardView.leadingAnchor constant:10],
@@ -55,18 +59,22 @@
             [_iconView.heightAnchor constraintEqualToConstant:20],
 
             // Title
-            [_titleLabel.leadingAnchor constraintEqualToAnchor:_iconView.trailingAnchor constant:10],
+            [_titleLabel.leadingAnchor constraintEqualToAnchor:_iconView.trailingAnchor
+                                                      constant:10],
             [_titleLabel.topAnchor constraintEqualToAnchor:_cardView.topAnchor constant:8],
-            [_titleLabel.trailingAnchor constraintEqualToAnchor:_badgeLabel.leadingAnchor constant:-8],
+            [_titleLabel.trailingAnchor constraintEqualToAnchor:_badgeLabel.leadingAnchor
+                                                       constant:-8],
 
             // Detail
             [_detailLabel.leadingAnchor constraintEqualToAnchor:_titleLabel.leadingAnchor],
             [_detailLabel.topAnchor constraintEqualToAnchor:_titleLabel.bottomAnchor constant:2],
             [_detailLabel.trailingAnchor constraintEqualToAnchor:_titleLabel.trailingAnchor],
-            [_detailLabel.bottomAnchor constraintLessThanOrEqualToAnchor:_cardView.bottomAnchor constant:-8],
+            [_detailLabel.bottomAnchor constraintLessThanOrEqualToAnchor:_cardView.bottomAnchor
+                                                                constant:-8],
 
             // Badge
-            [_badgeLabel.trailingAnchor constraintEqualToAnchor:_cardView.trailingAnchor constant:-10],
+            [_badgeLabel.trailingAnchor constraintEqualToAnchor:_cardView.trailingAnchor
+                                                       constant:-10],
             [_badgeLabel.centerYAnchor constraintEqualToAnchor:_cardView.centerYAnchor],
             [_badgeLabel.widthAnchor constraintGreaterThanOrEqualToConstant:32],
             [_badgeLabel.heightAnchor constraintEqualToConstant:18],
@@ -95,14 +103,14 @@
 
 - (void)setHighlighted:(BOOL)highlighted animated:(BOOL)animated {
     [super setHighlighted:highlighted animated:animated];
-    [UIView animateWithDuration:0.15 animations:^{
-        self.cardView.backgroundColor = highlighted
-            ? [SYTheme bgTertiary]
-            : [SYTheme bgSecondary];
-        self.cardView.transform = highlighted
-            ? CGAffineTransformMakeScale(0.98, 0.98)
-            : CGAffineTransformIdentity;
-    }];
+    [UIView animateWithDuration:0.15
+                     animations:^{
+                         self.cardView.backgroundColor =
+                             highlighted ? [SYTheme bgTertiary] : [SYTheme bgSecondary];
+                         self.cardView.transform = highlighted
+                                                       ? CGAffineTransformMakeScale(0.98, 0.98)
+                                                       : CGAffineTransformIdentity;
+                     }];
 }
 
 @end

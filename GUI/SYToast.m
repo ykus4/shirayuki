@@ -16,10 +16,14 @@ static const NSTimeInterval kDefaultDuration = 2.0;
         for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
             if ([scene isKindOfClass:[UIWindowScene class]]) {
                 for (UIWindow *w in ((UIWindowScene *)scene).windows) {
-                    if (w.isKeyWindow) { keyWindow = w; break; }
+                    if (w.isKeyWindow) {
+                        keyWindow = w;
+                        break;
+                    }
                 }
             }
-            if (keyWindow) break;
+            if (keyWindow)
+                break;
         }
         if (keyWindow) {
             [self showInView:keyWindow message:message type:type];
@@ -56,43 +60,62 @@ static const NSTimeInterval kDefaultDuration = 2.0;
     [view addSubview:toast];
 
     // Animate in
-    [UIView animateWithDuration:0.4 delay:0 usingSpringWithDamping:0.8
-          initialSpringVelocity:0.5 options:0 animations:^{
-        toast.alpha = 1;
-        toast.frame = CGRectMake(16, startY, w, kToastHeight);
-    } completion:^(BOOL finished) {
-        // Animate out
-        [UIView animateWithDuration:0.3 delay:kDefaultDuration options:UIViewAnimationOptionCurveEaseIn
-                         animations:^{
-            toast.alpha = 0;
-            toast.transform = CGAffineTransformMakeTranslation(0, -20);
-        } completion:^(BOOL finished) {
-            [toast removeFromSuperview];
+    [UIView animateWithDuration:0.4
+        delay:0
+        usingSpringWithDamping:0.8
+        initialSpringVelocity:0.5
+        options:0
+        animations:^{
+            toast.alpha = 1;
+            toast.frame = CGRectMake(16, startY, w, kToastHeight);
+        }
+        completion:^(BOOL finished) {
+            // Animate out
+            [UIView animateWithDuration:0.3
+                delay:kDefaultDuration
+                options:UIViewAnimationOptionCurveEaseIn
+                animations:^{
+                    toast.alpha = 0;
+                    toast.transform = CGAffineTransformMakeTranslation(0, -20);
+                }
+                completion:^(BOOL finished) {
+                    [toast removeFromSuperview];
+                }];
         }];
-    }];
 
     // Haptic
     UIImpactFeedbackGenerator *haptic = [[UIImpactFeedbackGenerator alloc]
-        initWithStyle:(type == SYToastError) ? UIImpactFeedbackStyleHeavy : UIImpactFeedbackStyleLight];
+        initWithStyle:(type == SYToastError) ? UIImpactFeedbackStyleHeavy
+                                             : UIImpactFeedbackStyleLight];
     [haptic impactOccurred];
 }
 
 + (UIColor *)bgColorForType:(SYToastType)type {
     switch (type) {
-        case SYToastSuccess: return [SYTheme success];
-        case SYToastError: return [SYTheme danger];
-        case SYToastWarning: return [SYTheme warning];
-        case SYToastInfo: return [SYTheme info];
+        case SYToastSuccess:
+            return [SYTheme success];
+        case SYToastError:
+            return [SYTheme danger];
+        case SYToastWarning:
+            return [SYTheme warning];
+        case SYToastInfo:
+            return [SYTheme info];
     }
     return [SYTheme accent];
 }
 
 + (UIImage *)iconForType:(SYToastType)type {
     switch (type) {
-        case SYToastSuccess: return [SYTheme icon:@"checkmark.circle.fill" size:14 color:[UIColor whiteColor]];
-        case SYToastError: return [SYTheme icon:@"xmark.circle.fill" size:14 color:[UIColor whiteColor]];
-        case SYToastWarning: return [SYTheme icon:@"exclamationmark.triangle.fill" size:14 color:[UIColor whiteColor]];
-        case SYToastInfo: return [SYTheme icon:@"info.circle.fill" size:14 color:[UIColor whiteColor]];
+        case SYToastSuccess:
+            return [SYTheme icon:@"checkmark.circle.fill" size:14 color:[UIColor whiteColor]];
+        case SYToastError:
+            return [SYTheme icon:@"xmark.circle.fill" size:14 color:[UIColor whiteColor]];
+        case SYToastWarning:
+            return [SYTheme icon:@"exclamationmark.triangle.fill"
+                            size:14
+                           color:[UIColor whiteColor]];
+        case SYToastInfo:
+            return [SYTheme icon:@"info.circle.fill" size:14 color:[UIColor whiteColor]];
     }
     return nil;
 }

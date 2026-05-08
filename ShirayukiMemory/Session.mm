@@ -1,9 +1,9 @@
 #include "Session.hpp"
+#import <Foundation/Foundation.h>
+#include <dirent.h>
 #include <fstream>
 #include <sstream>
 #include <sys/stat.h>
-#include <dirent.h>
-#import <Foundation/Foundation.h>
 
 namespace Shirayuki {
 
@@ -14,11 +14,20 @@ std::string escapeJson(const std::string &s) {
     std::string out;
     for (char c : s) {
         switch (c) {
-            case '"': out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\n': out += "\\n"; break;
-            case '\t': out += "\\t"; break;
-            default: out += c;
+            case '"':
+                out += "\\\"";
+                break;
+            case '\\':
+                out += "\\\\";
+                break;
+            case '\n':
+                out += "\\n";
+                break;
+            case '\t':
+                out += "\\t";
+                break;
+            default:
+                out += c;
         }
     }
     return out;
@@ -51,7 +60,8 @@ std::string toJson(const PointerChain &pc) {
        << "\"offset\":" << pc.moduleOffset << ","
        << "\"offsets\":[";
     for (size_t i = 0; i < pc.offsets.size(); i++) {
-        if (i > 0) ss << ",";
+        if (i > 0)
+            ss << ",";
         ss << pc.offsets[i];
     }
     ss << "]}";
@@ -68,7 +78,7 @@ std::string toJson(const Session::PatchRecord &p) {
     return ss.str();
 }
 
-} // anon
+} // namespace
 
 bool SessionManager::save(const Session &session, const std::string &filePath) {
     std::ostringstream ss;
@@ -79,7 +89,8 @@ bool SessionManager::save(const Session &session, const std::string &filePath) {
     // Bookmarks
     ss << "  \"bookmarks\":[";
     for (size_t i = 0; i < session.bookmarks.size(); i++) {
-        if (i > 0) ss << ",";
+        if (i > 0)
+            ss << ",";
         ss << "\n    " << toJson(session.bookmarks[i]);
     }
     ss << "\n  ],\n";
@@ -87,7 +98,8 @@ bool SessionManager::save(const Session &session, const std::string &filePath) {
     // Freeze entries
     ss << "  \"freezeEntries\":[";
     for (size_t i = 0; i < session.freezeEntries.size(); i++) {
-        if (i > 0) ss << ",";
+        if (i > 0)
+            ss << ",";
         ss << "\n    " << toJson(session.freezeEntries[i]);
     }
     ss << "\n  ],\n";
@@ -95,7 +107,8 @@ bool SessionManager::save(const Session &session, const std::string &filePath) {
     // Pointer chains
     ss << "  \"pointerChains\":[";
     for (size_t i = 0; i < session.pointerChains.size(); i++) {
-        if (i > 0) ss << ",";
+        if (i > 0)
+            ss << ",";
         ss << "\n    " << toJson(session.pointerChains[i]);
     }
     ss << "\n  ],\n";
@@ -103,7 +116,8 @@ bool SessionManager::save(const Session &session, const std::string &filePath) {
     // Patches
     ss << "  \"patches\":[";
     for (size_t i = 0; i < session.patches.size(); i++) {
-        if (i > 0) ss << ",";
+        if (i > 0)
+            ss << ",";
         ss << "\n    " << toJson(session.patches[i]);
     }
     ss << "\n  ],\n";
@@ -111,7 +125,8 @@ bool SessionManager::save(const Session &session, const std::string &filePath) {
     // Search history
     ss << "  \"searchHistory\":[";
     for (size_t i = 0; i < session.searchHistory.size(); i++) {
-        if (i > 0) ss << ",";
+        if (i > 0)
+            ss << ",";
         ss << "\"" << escapeJson(session.searchHistory[i]) << "\"";
     }
     ss << "]\n";
@@ -119,7 +134,8 @@ bool SessionManager::save(const Session &session, const std::string &filePath) {
     ss << "}\n";
 
     std::ofstream file(filePath);
-    if (!file.is_open()) return false;
+    if (!file.is_open())
+        return false;
     file << ss.str();
     return true;
 }
@@ -127,14 +143,15 @@ bool SessionManager::save(const Session &session, const std::string &filePath) {
 bool SessionManager::load(const std::string &filePath, Session &outSession) {
     // Use NSJSONSerialization for parsing (available on iOS)
     @autoreleasepool {
-        NSData *data = [NSData dataWithContentsOfFile:
-            [NSString stringWithUTF8String:filePath.c_str()]];
-        if (!data) return false;
+        NSData *data =
+            [NSData dataWithContentsOfFile:[NSString stringWithUTF8String:filePath.c_str()]];
+        if (!data)
+            return false;
 
         NSError *error = nil;
-        NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data
-            options:0 error:&error];
-        if (!json || error) return false;
+        NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&error];
+        if (!json || error)
+            return false;
 
         outSession.name = [json[@"name"] UTF8String] ?: "";
         outSession.targetBundle = [json[@"targetBundle"] UTF8String] ?: "";
@@ -200,14 +217,16 @@ bool SessionManager::load(const std::string &filePath, Session &outSession) {
 
 std::string SessionManager::defaultDirectory() {
     @autoreleasepool {
-        NSArray *paths = NSSearchPathForDirectoriesInDomains(
-            NSDocumentDirectory, NSUserDomainMask, YES);
+        NSArray *paths =
+            NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
         NSString *docs = paths.firstObject;
         NSString *dir = [docs stringByAppendingPathComponent:@"Shirayuki"];
 
         // Create if needed
         [[NSFileManager defaultManager] createDirectoryAtPath:dir
-            withIntermediateDirectories:YES attributes:nil error:nil];
+                                  withIntermediateDirectories:YES
+                                                   attributes:nil
+                                                        error:nil];
 
         return [dir UTF8String];
     }
@@ -219,8 +238,8 @@ std::vector<std::string> SessionManager::listSessions() {
 
     @autoreleasepool {
         NSString *nsDir = [NSString stringWithUTF8String:dir.c_str()];
-        NSArray *contents = [[NSFileManager defaultManager]
-            contentsOfDirectoryAtPath:nsDir error:nil];
+        NSArray *contents = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:nsDir
+                                                                                error:nil];
 
         for (NSString *file in contents) {
             if ([file hasSuffix:@".json"]) {
@@ -236,7 +255,7 @@ bool SessionManager::deleteSession(const std::string &filePath) {
     @autoreleasepool {
         return [[NSFileManager defaultManager]
             removeItemAtPath:[NSString stringWithUTF8String:filePath.c_str()]
-            error:nil];
+                       error:nil];
     }
 }
 

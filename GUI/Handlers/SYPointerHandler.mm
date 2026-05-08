@@ -1,9 +1,9 @@
 #import "SYPointerHandler.h"
-#import "ShirayukiViewController.h"
-#import "SYTheme.h"
-#import "SYResultCell.h"
-#import "SYToast.h"
 #import "PointerScan.hpp"
+#import "SYResultCell.h"
+#import "SYTheme.h"
+#import "SYToast.h"
+#import "ShirayukiViewController.h"
 
 using namespace Shirayuki;
 
@@ -17,15 +17,27 @@ static NSString *const kCellID = @"SYCell";
 
 - (instancetype)init {
     self = [super init];
-    if (self) { _results = [NSMutableArray new]; }
+    if (self) {
+        _results = [NSMutableArray new];
+    }
     return self;
 }
 
-- (NSString *)tabTitle { return @"Ptr"; }
-- (NSString *)tabIcon { return @"arrow.triangle.branch"; }
-- (NSString *)placeholder { return @"0xTARGET [depth] [offset]"; }
-- (NSString *)typeLabel { return @"ptr"; }
-- (NSString *)actionIcon { return @"magnifyingglass.circle.fill"; }
+- (NSString *)tabTitle {
+    return @"Ptr";
+}
+- (NSString *)tabIcon {
+    return @"arrow.triangle.branch";
+}
+- (NSString *)placeholder {
+    return @"0xTARGET [depth] [offset]";
+}
+- (NSString *)typeLabel {
+    return @"ptr";
+}
+- (NSString *)actionIcon {
+    return @"magnifyingglass.circle.fill";
+}
 
 - (void)performAction:(NSString *)input {
     NSArray *parts = [input componentsSeparatedByString:@" "];
@@ -56,28 +68,33 @@ static NSString *const kCellID = @"SYCell";
                 BOOL valid = (resolved == (uintptr_t)addr);
 
                 [self.results addObject:@{
-                    @"desc": @(chain.toString().c_str()),
-                    @"valid": @(valid),
-                    @"depth": @(chain.offsets.size())
+                    @"desc" : @(chain.toString().c_str()),
+                    @"valid" : @(valid),
+                    @"depth" : @(chain.offsets.size())
                 }];
             }
 
-            [SYToast show:[NSString stringWithFormat:@"%zu chains", chains.size()] type:SYToastSuccess];
+            [SYToast show:[NSString stringWithFormat:@"%zu chains", chains.size()]
+                     type:SYToastSuccess];
             [self.viewController reloadTable];
         });
     });
 }
 
-- (NSInteger)numberOfRows { return _results.count; }
+- (NSInteger)numberOfRows {
+    return _results.count;
+}
 
 - (UITableViewCell *)cellForRow:(NSInteger)row inTableView:(UITableView *)tableView {
-    SYResultCell *cell = [tableView dequeueReusableCellWithIdentifier:kCellID forIndexPath:
-        [NSIndexPath indexPathForRow:row inSection:0]];
+    SYResultCell *cell =
+        [tableView dequeueReusableCellWithIdentifier:kCellID
+                                        forIndexPath:[NSIndexPath indexPathForRow:row inSection:0]];
 
     NSDictionary *entry = _results[row];
     BOOL valid = [entry[@"valid"] boolValue];
 
-    [cell configureWithIcon:[SYTheme icon:@"arrow.triangle.branch" size:14
+    [cell configureWithIcon:[SYTheme icon:@"arrow.triangle.branch"
+                                     size:14
                                     color:valid ? [SYTheme success] : [SYTheme warning]]
                       title:entry[@"desc"]
                      detail:[NSString stringWithFormat:@"Depth %@", entry[@"depth"]]
