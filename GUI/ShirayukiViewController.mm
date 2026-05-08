@@ -10,12 +10,15 @@
 #import "SYTabHandler.h"
 #import "SYTheme.h"
 #import "SYToast.h"
+#import "Session.hpp"
 #import "ShirayukiMemory.hpp"
 #import "ShirayukiWindow.h"
 
 using namespace Shirayuki;
 
 static NSString *const kCellID = @"SYCell";
+
+static NSString *const kHistoryCellID = @"SYHistoryCell";
 
 @interface ShirayukiViewController () <UITableViewDelegate, UITableViewDataSource,
                                        UITextFieldDelegate>
@@ -30,6 +33,8 @@ static NSString *const kCellID = @"SYCell";
 @property (nonatomic, strong) UIView *narrowBar; // for search narrowing buttons
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UITableView *tableView;
+@property (nonatomic, strong) UITableView *historyDropdown;
+@property (nonatomic, strong) UIView *historyOverlay;
 
 @property (nonatomic, strong) NSArray<id<SYTabHandler>> *handlers;
 @property (nonatomic, assign) NSInteger currentTabIndex;
@@ -60,6 +65,51 @@ static NSString *const kCellID = @"SYCell";
     [self buildTableView];
     [self setupGestures];
     [self updateForCurrentTab:NO];
+
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(appDidEnterBackground)
+                                                 name:UIApplicationDidEnterBackgroundNotification
+                                               object:nil];
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+- (void)appDidEnterBackground {
+    [self autoSaveSession];
+}
+
+- (void)autoSaveSession {
+    // Collect current state into a Session and save
+    Shirayuki::Session session;
+
+    // Bundle ID of host app
+    NSString *bundleId = [[NSBundle mainBundle] bundleIdentifier] ?: @"unknown";
+    session.targetBundle = [bundleId UTF8String];
+    session.name = "autosave";
+
+    // Freeze entries
+    session.freezeEntries = Shirayuki::FreezeManager::shared().entries();
+
+    // Patches from handler
+    for (NSDictionary *p in self.patchHandler.allPatches) {
+        Shirayuki::Session::PatchRecord pr;
+        pr.address = [p[@"address"] unsignedLongLongValue];
+        pr.patchHex = [p[@"hex"] UTF8String] ?: "";
+        pr.originalHex = [p[@"original"] UTF8String] ?: "";
+        pr.label = [p[@"label"] UTF8String] ?: "";
+        pr.autoApply = NO;
+        session.patches.push_back(pr);
+    }
+
+    // Search history
+    for (NSString *s in [self.searchHandler searchHistory]) {
+        session.searchHistory.push_back([s UTF8String]);
+    }
+
+    std::string path = Shirayuki::SessionManager::autoSavePath(session.targetBundle);
+    Shirayuki::SessionManager::save(session, path);
 }
 
 - (void)setupHandlers {
@@ -225,6 +275,11 @@ static NSString *const kCellID = @"SYCell";
     [_actionButton addTarget:self
                       action:@selector(actionTapped)
             forControlEvents:UIControlEventTouchUpInside];
+    UILongPressGestureRecognizer *actionLongPress =
+        [[UILongPressGestureRecognizer alloc] initWithTarget:self
+                                                      action:@selector(actionLongPressed:)];
+    actionLongPress.minimumPressDuration = 0.5;
+    [_actionButton addGestureRecognizer:actionLongPress];
     [_inputContainer addSubview:_actionButton];
 
     [NSLayoutConstraint activateConstraints:@[
@@ -410,6 +465,96 @@ static NSString *const kCellID = @"SYCell";
     [[self currentHandler] performAction:input ?: @""];
 }
 
+- (void)actionLongPressed:(UILongPressGestureRecognizer *)gesture {
+    if (gesture.state != UIGestureRecognizerStateBegan)
+        return;
+
+    // On search tab: offer export + batch modify
+    if (_currentTabIndex == 0 && self.searchHandler.hasResults) {
+        UIAlertController *sheet =
+            [UIAlertController alertControllerWithTitle:@"Search Actions"
+                                                message:nil
+                                         preferredStyle:UIAlertControllerStyleActionSheet];
+
+        [sheet addAction:[UIAlertAction
+                             actionWithTitle:@"Export to JSON"
+                                       style:UIAlertActionStyleDefault
+                                     handler:^(UIAlertAction *a) {
+                                         NSString *path = [self.searchHandler exportResultsAsJSON];
+                                         if (path) {
+                                             NSString *fn = [path lastPathComponent];
+                                             [SYToast
+                                                 show:[NSString stringWithFormat:@"Saved: %@", fn]
+                                                 type:SYToastSuccess];
+                                         } else {
+                                             [SYToast show:@"Export failed" type:SYToastError];
+                                         }
+                                     }]];
+
+        [sheet addAction:[UIAlertAction actionWithTitle:@"Batch Modify"
+                                                  style:UIAlertActionStyleDefault
+                                                handler:^(UIAlertAction *a) {
+                                                    [self showBatchModifyAlert];
+                                                }]];
+
+        [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel"
+                                                  style:UIAlertActionStyleCancel
+                                                handler:nil]];
+        [self presentViewController:sheet animated:YES completion:nil];
+        return;
+    }
+
+    // On patch tab: offer undo/redo
+    if (_currentTabIndex == 1) {
+        UIAlertController *sheet =
+            [UIAlertController alertControllerWithTitle:@"Patch Actions"
+                                                message:nil
+                                         preferredStyle:UIAlertControllerStyleActionSheet];
+
+        if ([self.patchHandler canUndo]) {
+            [sheet addAction:[UIAlertAction actionWithTitle:@"Undo"
+                                                      style:UIAlertActionStyleDefault
+                                                    handler:^(UIAlertAction *a) {
+                                                        [self.patchHandler undo];
+                                                    }]];
+        }
+        if ([self.patchHandler canRedo]) {
+            [sheet addAction:[UIAlertAction actionWithTitle:@"Redo"
+                                                      style:UIAlertActionStyleDefault
+                                                    handler:^(UIAlertAction *a) {
+                                                        [self.patchHandler redo];
+                                                    }]];
+        }
+        [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel"
+                                                  style:UIAlertActionStyleCancel
+                                                handler:nil]];
+        [self presentViewController:sheet animated:YES completion:nil];
+    }
+}
+
+- (void)showBatchModifyAlert {
+    UIAlertController *alert =
+        [UIAlertController alertControllerWithTitle:@"Batch Modify"
+                                            message:@"Set all results to value"
+                                     preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *tf) {
+        tf.placeholder = @"value";
+        tf.keyboardType = UIKeyboardTypeDecimalPad;
+        tf.font = [SYTheme monoMedium];
+    }];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Apply"
+                                              style:UIAlertActionStyleDefault
+                                            handler:^(UIAlertAction *a) {
+                                                NSString *val = alert.textFields.firstObject.text;
+                                                if (val.length)
+                                                    [self.searchHandler batchModify:val];
+                                            }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
+                                              style:UIAlertActionStyleCancel
+                                            handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
 - (void)narrowTapped:(UIButton *)sender {
     static NSArray *modes = nil;
     if (!modes)
@@ -421,6 +566,76 @@ static NSString *const kCellID = @"SYCell";
         [self.searchHandler resetSearch];
     }
     [self updateForCurrentTab:NO];
+}
+
+#pragma mark - Search history dropdown
+
+- (void)showSearchHistory {
+    NSArray *history = [self.searchHandler searchHistory];
+    if (!history.count)
+        return;
+
+    if (_historyDropdown) {
+        [_historyDropdown reloadData];
+        _historyOverlay.hidden = NO;
+        _historyDropdown.hidden = NO;
+        return;
+    }
+
+    _historyOverlay = [[UIView alloc] init];
+    _historyOverlay.translatesAutoresizingMaskIntoConstraints = NO;
+    _historyOverlay.backgroundColor = [UIColor clearColor];
+    UITapGestureRecognizer *tap =
+        [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(dismissHistory)];
+    [_historyOverlay addGestureRecognizer:tap];
+    [self.view addSubview:_historyOverlay];
+
+    _historyDropdown = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
+    _historyDropdown.backgroundColor = [SYTheme bgSecondary];
+    _historyDropdown.layer.cornerRadius = [SYTheme radiusSmall];
+    _historyDropdown.layer.borderColor = [SYTheme accentDim].CGColor;
+    _historyDropdown.layer.borderWidth = 0.5;
+    _historyDropdown.separatorStyle = UITableViewCellSeparatorStyleSingleLine;
+    _historyDropdown.separatorColor = [SYTheme accentDim];
+    _historyDropdown.rowHeight = 30;
+    _historyDropdown.translatesAutoresizingMaskIntoConstraints = NO;
+    _historyDropdown.delegate = self;
+    _historyDropdown.dataSource = self;
+    _historyDropdown.tag = 999; // distinguish from main table
+    [_historyDropdown registerClass:[UITableViewCell class] forCellReuseIdentifier:kHistoryCellID];
+    [self.view addSubview:_historyDropdown];
+
+    NSUInteger visibleRows = MIN((NSUInteger)5, history.count);
+    CGFloat dropHeight = visibleRows * 30.0;
+
+    [NSLayoutConstraint activateConstraints:@[
+        [_historyOverlay.topAnchor constraintEqualToAnchor:self.view.topAnchor],
+        [_historyOverlay.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
+        [_historyOverlay.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        [_historyOverlay.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
+        [_historyDropdown.topAnchor constraintEqualToAnchor:_inputContainer.bottomAnchor
+                                                   constant:2],
+        [_historyDropdown.leadingAnchor constraintEqualToAnchor:_inputField.leadingAnchor],
+        [_historyDropdown.trailingAnchor constraintEqualToAnchor:_inputField.trailingAnchor],
+        [_historyDropdown.heightAnchor constraintEqualToConstant:dropHeight],
+    ]];
+
+    _historyDropdown.alpha = 0;
+    [UIView animateWithDuration:0.15
+                     animations:^{
+                         self.historyDropdown.alpha = 1;
+                     }];
+}
+
+- (void)dismissHistory {
+    [UIView animateWithDuration:0.1
+        animations:^{
+            self.historyDropdown.alpha = 0;
+        }
+        completion:^(BOOL f) {
+            self.historyOverlay.hidden = YES;
+            self.historyDropdown.hidden = YES;
+        }];
 }
 
 #pragma mark - Drag
@@ -440,6 +655,31 @@ static NSString *const kCellID = @"SYCell";
     NSIndexPath *indexPath = [_tableView indexPathForRowAtPoint:point];
     if (!indexPath)
         return;
+
+    // Freeze tab: show auto-increment menu on long press
+    if (_currentTabIndex == 2) {
+        UIAlertController *sheet =
+            [UIAlertController alertControllerWithTitle:@"Freeze Options"
+                                                message:nil
+                                         preferredStyle:UIAlertControllerStyleActionSheet];
+        NSInteger row = indexPath.row;
+        [sheet addAction:[UIAlertAction actionWithTitle:@"Toggle Auto-Increment"
+                                                  style:UIAlertActionStyleDefault
+                                                handler:^(UIAlertAction *a) {
+                                                    [self.freezeHandler
+                                                        toggleAutoIncrementForRow:row];
+                                                }]];
+        [sheet addAction:[UIAlertAction actionWithTitle:@"Copy Address"
+                                                  style:UIAlertActionStyleDefault
+                                                handler:^(UIAlertAction *a) {
+                                                    [self.freezeHandler didLongPressRow:row];
+                                                }]];
+        [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel"
+                                                  style:UIAlertActionStyleCancel
+                                                handler:nil]];
+        [self presentViewController:sheet animated:YES completion:nil];
+        return;
+    }
 
     id<SYTabHandler> h = [self currentHandler];
     if ([h respondsToSelector:@selector(didLongPressRow:)]) {
@@ -528,15 +768,35 @@ static NSString *const kCellID = @"SYCell";
 #pragma mark - UITableView
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    if (tableView.tag == 999) {
+        return (NSInteger)[self.searchHandler searchHistory].count;
+    }
     return [[self currentHandler] numberOfRows];
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
          cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    if (tableView.tag == 999) {
+        UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:kHistoryCellID
+                                                                forIndexPath:indexPath];
+        NSString *entry = [self.searchHandler searchHistory][indexPath.row];
+        cell.textLabel.text = entry;
+        cell.textLabel.font = [SYTheme monoMedium];
+        cell.textLabel.textColor = [SYTheme textPrimary];
+        cell.backgroundColor = [UIColor clearColor];
+        return cell;
+    }
     return [[self currentHandler] cellForRow:indexPath.row inTableView:tableView];
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    if (tableView.tag == 999) {
+        NSString *entry = [self.searchHandler searchHistory][indexPath.row];
+        _inputField.text = entry;
+        [self dismissHistory];
+        [_inputField resignFirstResponder];
+        return;
+    }
     id<SYTabHandler> h = [self currentHandler];
     if ([h respondsToSelector:@selector(didSelectRow:)]) {
         [h didSelectRow:indexPath.row];
@@ -567,8 +827,19 @@ static NSString *const kCellID = @"SYCell";
 #pragma mark - UITextField
 
 - (BOOL)textFieldShouldReturn:(UITextField *)textField {
+    [self dismissHistory];
     [self actionTapped];
     return YES;
+}
+
+- (void)textFieldDidBeginEditing:(UITextField *)textField {
+    if (_currentTabIndex == 0) {
+        [self showSearchHistory];
+    }
+}
+
+- (void)textFieldDidEndEditing:(UITextField *)textField {
+    [self dismissHistory];
 }
 
 @end

@@ -3,4 +3,5 @@
 @interface ShirayukiViewController : UIViewController
 - (void)reloadTable;
 - (void)showModifyAlertForAddress:(uintptr_t)addr type:(NSString *)type;
+- (void)showSearchHistory;
 @end
