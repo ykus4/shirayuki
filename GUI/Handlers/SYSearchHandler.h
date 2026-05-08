@@ -12,7 +12,9 @@
 - (NSString *)shortType;
 - (void)cycleType;
 - (void)narrow:(NSString *)mode; // "changed","unchanged","increased","decreased","exact"
+- (void)narrowExact:(NSString *)input;
 - (void)batchModify:(NSString *)value;
 - (void)resetSearch;
 - (NSArray<NSString *> *)searchHistory;
+- (NSString *)exportResultsAsJSON; // returns file path on success, nil on failure
 @end

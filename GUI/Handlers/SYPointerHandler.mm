@@ -62,19 +62,21 @@ static NSString *const kCellID = @"SYCell";
 
         auto chains = PointerScanner::scan(config);
 
+        NSMutableArray *localResults = [NSMutableArray new];
+        for (auto &chain : chains) {
+            uintptr_t resolved = chain.resolve();
+            BOOL valid = (resolved == (uintptr_t)addr);
+            [localResults addObject:@{
+                @"desc" : @(chain.toString().c_str()),
+                @"valid" : @(valid),
+                @"depth" : @(chain.offsets.size())
+            }];
+        }
+        size_t chainCount = chains.size();
+
         dispatch_async(dispatch_get_main_queue(), ^{
-            for (auto &chain : chains) {
-                uintptr_t resolved = chain.resolve();
-                BOOL valid = (resolved == (uintptr_t)addr);
-
-                [self.results addObject:@{
-                    @"desc" : @(chain.toString().c_str()),
-                    @"valid" : @(valid),
-                    @"depth" : @(chain.offsets.size())
-                }];
-            }
-
-            [SYToast show:[NSString stringWithFormat:@"%zu chains", chains.size()]
+            [self.results setArray:localResults];
+            [SYToast show:[NSString stringWithFormat:@"%zu chains", chainCount]
                      type:SYToastSuccess];
             [self.viewController reloadTable];
         });

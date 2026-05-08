@@ -2,6 +2,7 @@
 #import "SYResultCell.h"
 #import "SYTheme.h"
 #import "SYToast.h"
+#import "SYValueTypeUtil.h"
 #import "ShirayukiViewController.h"
 #import "Watchpoint.hpp"
 
@@ -61,20 +62,17 @@ static NSString *const kCellID = @"SYCell";
         return;
     }
 
-    ValueType type = ValueType::Int32;
-    if (parts.count > 1) {
-        NSString *t = parts[1];
-        if ([t isEqualToString:@"f32"])
-            type = ValueType::Float32;
-        else if ([t isEqualToString:@"f64"])
-            type = ValueType::Float64;
-        else if ([t isEqualToString:@"i64"])
-            type = ValueType::Int64;
-        else if ([t isEqualToString:@"i16"])
-            type = ValueType::Int16;
-        else if ([t isEqualToString:@"i8"])
-            type = ValueType::Int8;
-    }
+    NSDictionary *typeMap = @{
+        @"f32" : @"float",
+        @"f64" : @"double",
+        @"i64" : @"int64",
+        @"i32" : @"int32",
+        @"i16" : @"int16",
+        @"i8" : @"int8"
+    };
+    NSString *typeTag = parts.count > 1 ? parts[1] : @"i32";
+    NSString *canonicalType = typeMap[typeTag] ?: @"int32";
+    ValueType type = SYValueTypeUtil::fromString(canonicalType);
 
     auto &wm = WatchManager::shared();
     wm.add((uintptr_t)addr, type, "");
@@ -111,12 +109,25 @@ static NSString *const kCellID = @"SYCell";
     UIColor *iconColor = entry.hasChanged ? [SYTheme warning] : [SYTheme success];
     NSString *badge = [NSString stringWithFormat:@"%llu", entry.changeCount];
 
+    // Show diff line if value has changed: "prev → current [type]"
+    NSString *detail;
+    if (entry.hasChanged && !entry.previousValue.empty()) {
+        // Format previous value using same formatting path
+        WatchEntry prevCopy = entry;
+        prevCopy.currentValue = entry.previousValue;
+        NSString *prevStr = @(WatchManager::formatValue(prevCopy).c_str());
+        detail = [NSString stringWithFormat:@"%@ → %@ [%s]", prevStr, valueStr,
+                                            valueTypeLabel(entry.type).c_str()];
+    } else {
+        detail =
+            [NSString stringWithFormat:@"= %@ [%s]", valueStr, valueTypeLabel(entry.type).c_str()];
+    }
+
     [cell configureWithIcon:[SYTheme icon:entry.hasChanged ? @"bolt.fill" : @"eye.fill"
                                      size:14
                                     color:iconColor]
                       title:addrStr
-                     detail:[NSString stringWithFormat:@"= %@ [%s]", valueStr,
-                                                       valueTypeLabel(entry.type).c_str()]
+                     detail:detail
                       badge:entry.changeCount > 0 ? badge : nil
                  badgeColor:[SYTheme accentDim]];
     return cell;

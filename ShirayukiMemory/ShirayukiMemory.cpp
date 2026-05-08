@@ -9,6 +9,8 @@
 
 namespace Shirayuki {
 
+static constexpr size_t kStackRegionMinAddress = 0x100000000ULL; // ARM64 stack heuristic
+
 // =============================================================================
 // Memory
 // =============================================================================
@@ -156,8 +158,7 @@ std::vector<RegionInfo> Memory::listRegionsFiltered(RegionFilter filter) {
                     filtered.push_back(r);
                 break;
             case RegionFilter::StackOnly:
-                // Stack regions are typically at high addresses and rw-
-                if (r.isReadable() && r.isWritable() && r.start > 0x100000000ULL)
+                if (r.isReadable() && r.isWritable() && r.start > kStackRegionMinAddress)
                     filtered.push_back(r);
                 break;
             case RegionFilter::ReadWrite:
@@ -333,6 +334,34 @@ static bool parseIdaPattern(const std::string &pattern, PatternData &out) {
     return !out.bytes.empty();
 }
 
+// Shared inner scan loop — calls callback(matchOffset) for each hit, stops if callback returns
+// false
+static void scanPattern(const uint8_t *buf, size_t len, const PatternData &pat,
+                        std::function<bool(size_t)> onMatch) {
+    size_t patLen = pat.bytes.size();
+    if (len < patLen)
+        return;
+
+    uint8_t anchor = pat.bytes[pat.firstSolidByte];
+
+    for (size_t i = 0; i <= len - patLen;) {
+        if (buf[i + pat.firstSolidByte] != anchor) {
+            i++;
+            continue;
+        }
+        bool found = true;
+        for (size_t j = 0; j < patLen; j++) {
+            if (pat.mask[j] && buf[i + j] != pat.bytes[j]) {
+                found = false;
+                break;
+            }
+        }
+        if (found && !onMatch(i))
+            return;
+        i++;
+    }
+}
+
 std::vector<uintptr_t> Scanner::findPattern(uintptr_t start, size_t len,
                                             const std::string &pattern) {
     std::vector<uintptr_t> results;
@@ -341,34 +370,10 @@ std::vector<uintptr_t> Scanner::findPattern(uintptr_t start, size_t len,
         return results;
 
     const uint8_t *buf = reinterpret_cast<const uint8_t *>(start);
-    size_t patLen = pat.bytes.size();
-    if (len < patLen)
-        return results;
-
-    // Build skip table based on first solid byte
-    // If the first solid byte doesn't match, we can skip
-    uint8_t anchor = pat.bytes[pat.firstSolidByte];
-
-    for (size_t i = 0; i <= len - patLen;) {
-        // Quick check on anchor byte
-        if (buf[i + pat.firstSolidByte] != anchor) {
-            i++;
-            continue;
-        }
-
-        bool found = true;
-        for (size_t j = 0; j < patLen; j++) {
-            if (pat.mask[j] && buf[i + j] != pat.bytes[j]) {
-                found = false;
-                break;
-            }
-        }
-        if (found) {
-            results.push_back(start + i);
-        }
-        i++;
-    }
-
+    scanPattern(buf, len, pat, [&](size_t i) {
+        results.push_back(start + i);
+        return true;
+    });
     return results;
 }
 
@@ -378,31 +383,12 @@ uintptr_t Scanner::findPatternFirst(uintptr_t start, size_t len, const std::stri
         return 0;
 
     const uint8_t *buf = reinterpret_cast<const uint8_t *>(start);
-    size_t patLen = pat.bytes.size();
-    if (len < patLen)
-        return 0;
-
-    uint8_t anchor = pat.bytes[pat.firstSolidByte];
-
-    for (size_t i = 0; i <= len - patLen;) {
-        if (buf[i + pat.firstSolidByte] != anchor) {
-            i++;
-            continue;
-        }
-
-        bool found = true;
-        for (size_t j = 0; j < patLen; j++) {
-            if (pat.mask[j] && buf[i + j] != pat.bytes[j]) {
-                found = false;
-                break;
-            }
-        }
-        if (found)
-            return start + i;
-        i++;
-    }
-
-    return 0;
+    uintptr_t result = 0;
+    scanPattern(buf, len, pat, [&](size_t i) {
+        result = start + i;
+        return false; // stop at first match
+    });
+    return result;
 }
 
 std::vector<uintptr_t> Scanner::findPatternInImage(const ImageInfo &img,
@@ -435,6 +421,40 @@ std::vector<uintptr_t> Scanner::findString(uintptr_t start, size_t len, const st
         if (memcmp(buf + i, needle, needleLen) == 0) {
             results.push_back(start + i);
         }
+    }
+
+    return results;
+}
+
+std::vector<uintptr_t> Scanner::findRegex(uintptr_t start, size_t len, const std::string &pattern) {
+    std::vector<uintptr_t> results;
+    if (pattern.empty() || !len)
+        return results;
+
+    std::regex re;
+    try {
+        re = std::regex(pattern, std::regex::ECMAScript | std::regex::optimize);
+    } catch (...) {
+        return results; // invalid pattern
+    }
+
+    const char *buf = reinterpret_cast<const char *>(start);
+    // Walk null-terminated strings within the region
+    size_t i = 0;
+    while (i < len) {
+        // Find end of string
+        size_t j = i;
+        while (j < len && buf[j] != '\0')
+            j++;
+
+        if (j > i) {
+            std::string s(buf + i, j - i);
+            if (std::regex_search(s, re)) {
+                results.push_back(start + i);
+            }
+        }
+
+        i = j + 1;
     }
 
     return results;
