@@ -1,0 +1,9 @@
+Package: com.yotti.shirayuki
+Name: Shirayuki
+Depends: mobilesubstrate
+Version: 0.1.0
+Architecture: iphoneos-arm64
+Description: KittyMemory-inspired memory search & patch toolkit for jailbroken iOS
+Maintainer: y
+Author: y
+Section: Tweaks
