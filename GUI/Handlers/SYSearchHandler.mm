@@ -101,87 +101,48 @@ static const size_t kMaxRegionSize = 100 * 1024 * 1024;
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         auto regions = Memory::listRegionsFiltered(RegionFilter::ReadWrite);
+        size_t totalHits = 0;
+        NSMutableArray *localResults = [NSMutableArray new];
+        NSMutableArray *localCandidates = [NSMutableArray new];
 
-        // Collect region start/size as plain ObjC numbers before any parallel work
-        NSMutableArray *regionStarts = [NSMutableArray arrayWithCapacity:regions.size()];
-        NSMutableArray *regionSizes = [NSMutableArray arrayWithCapacity:regions.size()];
-        for (size_t i = 0; i < regions.size(); i++) {
-            if (regions[i].size <= kMaxRegionSize) {
-                [regionStarts addObject:@(regions[i].start)];
-                [regionSizes addObject:@(regions[i].size)];
-            }
-        }
-
-        // Use the C linkage helper (SYScanHelper.cpp) so no C++ templates appear in blocks
         const char *typeC = [searchType UTF8String];
         const char *inputC = [input UTF8String];
 
-        NSLock *lock = [NSLock new];
-        NSMutableArray *mergedResults = [NSMutableArray new];
-        NSMutableArray *mergedCandidates = [NSMutableArray new];
-        __block size_t totalHits = 0;
-        __block BOOL limitReached = NO;
+        for (size_t i = 0; i < regions.size(); i++) {
+            if (regions[i].size > kMaxRegionSize)
+                continue;
+            if (totalHits >= kMaxScanResults)
+                break;
 
-        dispatch_queue_t concurrentQ = dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
-        dispatch_group_t group = dispatch_group_create();
+            size_t count = 0, valSize = 4;
+            uintptr_t *hits =
+                SYScanRegion(regions[i].start, regions[i].size, typeC, inputC, &count, &valSize);
+            if (!hits) {
+                continue;
+            }
 
-        for (NSUInteger ri = 0; ri < regionStarts.count; ri++) {
-            uintptr_t rStart = [regionStarts[ri] unsignedLongLongValue];
-            size_t rSize = (size_t)[regionSizes[ri] unsignedLongLongValue];
-            dispatch_group_async(group, concurrentQ, ^{
-                [lock lock];
-                BOOL skip = limitReached;
-                [lock unlock];
-                if (skip)
-                    return;
-
-                size_t count = 0, valSize = 4;
-                uintptr_t *hits = SYScanRegion(rStart, rSize, typeC, inputC, &count, &valSize);
-                if (!hits || count == 0) {
-                    SYScanFreeResults(hits);
-                    return;
+            for (size_t k = 0; k < count && totalHits < kMaxScanResults; k++) {
+                uintptr_t addr = hits[k];
+                [localResults addObject:@(addr)];
+                NSMutableDictionary *c = [NSMutableDictionary new];
+                c[@"address"] = @(addr);
+                if (valSize > 0) {
+                    unsigned char buf[8] = {};
+                    SYMemRead(addr, buf, valSize);
+                    c[@"snapshot"] = [NSData dataWithBytes:buf length:valSize];
                 }
-
-                NSMutableArray *localR = [NSMutableArray arrayWithCapacity:count];
-                NSMutableArray *localC = [NSMutableArray arrayWithCapacity:count];
-                for (size_t k = 0; k < count; k++) {
-                    uintptr_t addr = hits[k];
-                    [localR addObject:@(addr)];
-                    NSMutableDictionary *c = [NSMutableDictionary new];
-                    c[@"address"] = @(addr);
-                    if (valSize > 0) {
-                        unsigned char buf[8] = {};
-                        SYMemRead(addr, buf, valSize);
-                        c[@"snapshot"] = [NSData dataWithBytes:buf length:valSize];
-                    }
-                    [localC addObject:c];
-                }
-                SYScanFreeResults(hits);
-
-                [lock lock];
-                totalHits += count;
-                NSUInteger canAdd = (mergedResults.count < kMaxScanResults)
-                                        ? kMaxScanResults - mergedResults.count
-                                        : 0;
-                if (canAdd > 0) {
-                    NSUInteger add = MIN(canAdd, localR.count);
-                    [mergedResults
-                        addObjectsFromArray:[localR subarrayWithRange:NSMakeRange(0, add)]];
-                    [mergedCandidates
-                        addObjectsFromArray:[localC subarrayWithRange:NSMakeRange(0, add)]];
-                }
-                if (totalHits >= kMaxScanResults)
-                    limitReached = YES;
-                [lock unlock];
-            });
+                [localCandidates addObject:c];
+                totalHits++;
+            }
+            SYScanFreeResults(hits);
         }
 
-        dispatch_group_notify(group, dispatch_get_main_queue(), ^{
+        dispatch_async(dispatch_get_main_queue(), ^{
             __strong typeof(weakSelf) strongSelf = weakSelf;
             if (!strongSelf)
                 return;
-            [strongSelf.results setArray:mergedResults];
-            [strongSelf.candidates setArray:mergedCandidates];
+            [strongSelf.results setArray:localResults];
+            [strongSelf.candidates setArray:localCandidates];
             strongSelf.searching = NO;
             strongSelf.hasResults = (totalHits > 0);
             strongSelf.isNarrowing = strongSelf.hasResults;
