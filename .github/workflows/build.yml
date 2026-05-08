@@ -9,13 +9,40 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
+    env:
+      THEOS: ${{ github.workspace }}/theos
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Theos
-        uses: theos/theos-action@main
+      - name: Cache Theos
+        uses: actions/cache@v4
         with:
-          theos-sdks-path: ./sdks
+          path: ${{ github.workspace }}/theos
+          key: theos-${{ runner.os }}-${{ hashFiles('.github/workflows/build.yml') }}
+
+      - name: Install Theos
+        run: |
+          if [ ! -d "$THEOS" ]; then
+            git clone --recursive https://github.com/theos/theos.git "$THEOS"
+          fi
+
+      - name: Cache SDKs
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/theos/sdks
+          key: theos-sdks-${{ runner.os }}-iPhoneOS17.5
+
+      - name: Download iOS SDK
+        run: |
+          if [ ! -d "$THEOS/sdks/iPhoneOS17.5.sdk" ]; then
+            curl -LO https://github.com/theos/sdks/releases/download/2024-10-11/iPhoneOS17.5.sdk.tar.xz
+            tar -xJf iPhoneOS17.5.sdk.tar.xz -C "$THEOS/sdks"
+          fi
+
+      - name: Install dependencies
+        run: sudo apt-get install -y libplist-utils
 
       - name: Build
         run: make clean && make
