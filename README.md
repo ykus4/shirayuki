@@ -1,5 +1,9 @@
 # shirayuki
 
+<p align="center">
+  <img src="assets/icon.png" width="160" alt="shirayuki icon" />
+</p>
+
 KittyMemory-inspired memory toolkit for jailbroken iOS. Theos tweak with in-app overlay GUI.
 
 ---
