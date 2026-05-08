@@ -43,6 +43,9 @@ jobs:
             rm sdk.tar.xz
           fi
 
+      - name: Install ldid
+        run: brew install ldid
+
       - name: Build
         run: make clean && make
 
