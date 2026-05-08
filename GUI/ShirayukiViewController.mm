@@ -237,7 +237,6 @@ static NSString *const kCellID = @"SYCell";
     [self.view addSubview:_narrowBar];
 
     NSArray *modes = @[ @"Changed", @"Unchanged", @"Inc", @"Dec", @"Reset" ];
-    NSArray *icons = @[ @"arrow.left.arrow.right", @"equal", @"arrow.up", @"arrow.down", @"trash" ];
     CGFloat x = 0;
 
     for (NSUInteger i = 0; i < modes.count; i++) {
