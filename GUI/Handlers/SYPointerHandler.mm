@@ -53,8 +53,6 @@ static NSString *const kCellID = @"SYCell";
     [_results removeAllObjects];
     [SYToast show:@"Scanning pointers..." type:SYToastInfo];
 
-    __weak typeof(self) weakSelf = self;
-
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         PointerScanConfig config;
         config.targetAddress = (uintptr_t)addr;
@@ -64,23 +62,23 @@ static NSString *const kCellID = @"SYCell";
 
         auto chains = PointerScanner::scan(config);
 
-        dispatch_async(dispatch_get_main_queue(), ^{
-            __strong typeof(weakSelf) strongSelf = weakSelf;
-            if (!strongSelf)
-                return;
+        NSMutableArray *localResults = [NSMutableArray new];
+        for (auto &chain : chains) {
+            uintptr_t resolved = chain.resolve();
+            BOOL valid = (resolved == (uintptr_t)addr);
+            [localResults addObject:@{
+                @"desc" : @(chain.toString().c_str()),
+                @"valid" : @(valid),
+                @"depth" : @(chain.offsets.size())
+            }];
+        }
+        size_t chainCount = chains.size();
 
-            for (auto &chain : chains) {
-                uintptr_t resolved = chain.resolve();
-                BOOL valid = (resolved == (uintptr_t)addr);
-                [strongSelf.results addObject:@{
-                    @"desc" : @(chain.toString().c_str()),
-                    @"valid" : @(valid),
-                    @"depth" : @(chain.offsets.size())
-                }];
-            }
-            [SYToast show:[NSString stringWithFormat:@"%zu chains", chains.size()]
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self.results setArray:localResults];
+            [SYToast show:[NSString stringWithFormat:@"%zu chains", chainCount]
                      type:SYToastSuccess];
-            [strongSelf.viewController reloadTable];
+            [self.viewController reloadTable];
         });
     });
 }
