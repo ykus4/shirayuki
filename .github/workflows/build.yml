@@ -85,18 +85,40 @@ jobs:
             const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             const ver = '${{ steps.ver.outputs.ver }}';
             const artifact = '${{ steps.ver.outputs.artifact }}';
-            const lines = [
-              `${success ? '✅' : '❌'} **Build ${success ? 'succeeded' : 'failed'}** — \`${ver}\``,
-              '',
-            ];
-            if (success) {
-              lines.push(`📦 [Download .deb](${runUrl}) (Actions → Artifacts → \`${artifact}\`)`);
-            } else {
-              lines.push(`🔍 [View logs](${runUrl})`);
-            }
+            const sha = context.sha.slice(0, 7);
+            const branch = context.payload.pull_request.head.ref;
+            const commitUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${context.sha}`;
+
+            const body = success ? `
+            ## 🏗️ Build Report
+
+            | | |
+            |---|---|
+            | **Status** | ✅ Succeeded |
+            | **Version** | \`${ver}\` |
+            | **Branch** | \`${branch}\` |
+            | **Commit** | [\`${sha}\`](${commitUrl}) |
+
+            ### 📦 Install
+            > [Download \`.deb\`](${runUrl}) — Actions → Artifacts → \`${artifact}\`
+            \`\`\`sh
+            dpkg -i ${artifact}.deb && killall -9 SpringBoard
+            \`\`\`
+            ` : `
+            ## 🏗️ Build Report
+
+            | | |
+            |---|---|
+            | **Status** | ❌ Failed |
+            | **Branch** | \`${branch}\` |
+            | **Commit** | [\`${sha}\`](${commitUrl}) |
+
+            ### 🔍 [View build logs](${runUrl})
+            `;
+
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: lines.join('\n'),
+              body: body.replace(/^            /gm, ''),
             });
