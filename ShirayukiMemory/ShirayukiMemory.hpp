@@ -8,6 +8,7 @@
 #include <mach-o/dyld.h>
 #include <mach-o/getsect.h>
 #include <mach/mach.h>
+#include <regex>
 #include <string>
 #include <sys/mman.h>
 #include <vector>
@@ -136,6 +137,9 @@ template <typename T> std::vector<uintptr_t> findValue(uintptr_t start, size_t l
 
 // String search
 std::vector<uintptr_t> findString(uintptr_t start, size_t len, const std::string &str);
+
+// Regex search (matches against null-terminated strings in the region)
+std::vector<uintptr_t> findRegex(uintptr_t start, size_t len, const std::string &pattern);
 
 // Narrowing: filter candidates by comparing current vs snapshot
 struct Candidate {

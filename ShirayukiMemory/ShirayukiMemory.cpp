@@ -426,6 +426,40 @@ std::vector<uintptr_t> Scanner::findString(uintptr_t start, size_t len, const st
     return results;
 }
 
+std::vector<uintptr_t> Scanner::findRegex(uintptr_t start, size_t len, const std::string &pattern) {
+    std::vector<uintptr_t> results;
+    if (pattern.empty() || !len)
+        return results;
+
+    std::regex re;
+    try {
+        re = std::regex(pattern, std::regex::ECMAScript | std::regex::optimize);
+    } catch (...) {
+        return results; // invalid pattern
+    }
+
+    const char *buf = reinterpret_cast<const char *>(start);
+    // Walk null-terminated strings within the region
+    size_t i = 0;
+    while (i < len) {
+        // Find end of string
+        size_t j = i;
+        while (j < len && buf[j] != '\0')
+            j++;
+
+        if (j > i) {
+            std::string s(buf + i, j - i);
+            if (std::regex_search(s, re)) {
+                results.push_back(start + i);
+            }
+        }
+
+        i = j + 1;
+    }
+
+    return results;
+}
+
 // --- Narrowing ---
 
 static int compareBytes(const uint8_t *a, const uint8_t *b, ValueType type) {

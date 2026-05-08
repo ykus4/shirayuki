@@ -88,6 +88,17 @@ void FreezeManager::updateValue(uint64_t id, const void *value, size_t len) {
     }
 }
 
+void FreezeManager::setAutoIncrement(uint64_t id, bool enabled, int64_t step) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    for (auto &entry : m_entries) {
+        if (entry.id == id) {
+            entry.autoIncrement = enabled;
+            entry.incrementStep = step;
+            break;
+        }
+    }
+}
+
 void FreezeManager::start(uint32_t intervalMs) {
     // Prevent double-start race
     bool expected = false;
@@ -157,6 +168,31 @@ void FreezeManager::loop() {
                             pendingCallbacks.push_back(
                                 {entry.onTriggered, {entry.id, entry.address}});
                         }
+                    }
+                } else if (entry.autoIncrement) {
+                    // Read current value, add step, write back and update stored value
+                    size_t sz = entry.value.size();
+                    std::vector<uint8_t> current(sz);
+                    if (Memory::read(entry.address, current.data(), sz) == Status::Success) {
+                        // Perform signed integer addition on raw bytes (little-endian)
+                        int64_t step = entry.incrementStep;
+                        if (sz == 4) {
+                            int32_t v;
+                            memcpy(&v, current.data(), 4);
+                            v += (int32_t)step;
+                            memcpy(entry.value.data(), &v, 4);
+                        } else if (sz == 8) {
+                            int64_t v;
+                            memcpy(&v, current.data(), 8);
+                            v += step;
+                            memcpy(entry.value.data(), &v, 8);
+                        } else if (sz == 2) {
+                            int16_t v;
+                            memcpy(&v, current.data(), 2);
+                            v += (int16_t)step;
+                            memcpy(entry.value.data(), &v, 2);
+                        }
+                        Memory::write(entry.address, entry.value.data(), sz);
                     }
                 } else {
                     Memory::write(entry.address, entry.value.data(), entry.value.size());

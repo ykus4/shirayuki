@@ -58,11 +58,14 @@ static const size_t kMaxRegionSize = 100 * 1024 * 1024;
         return @"hex";
     if ([_searchType isEqualToString:@"string"])
         return @"str";
+    if ([_searchType isEqualToString:@"regex"])
+        return @"rex";
     return SYValueTypeUtil::shortLabel(SYValueTypeUtil::fromString(_searchType));
 }
 
 - (void)cycleType {
-    NSArray *types = @[ @"int32", @"int16", @"int64", @"float", @"double", @"hex", @"string" ];
+    NSArray *types =
+        @[ @"int32", @"int16", @"int64", @"float", @"double", @"hex", @"string", @"regex" ];
     NSUInteger idx = [types indexOfObject:_searchType];
     _searchType = types[(idx + 1) % types.count];
 }
@@ -97,45 +100,83 @@ static const size_t kMaxRegionSize = 100 * 1024 * 1024;
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         auto regions = Memory::listRegionsFiltered(RegionFilter::ReadWrite);
-        size_t totalHits = 0;
-        NSMutableArray *localResults = [NSMutableArray new];
-        NSMutableArray *localCandidates = [NSMutableArray new];
 
-        for (auto &region : regions) {
-            if (region.size > kMaxRegionSize)
-                continue;
-
-            std::vector<uintptr_t> hits;
-            size_t valSize = 4;
-
-            if ([searchType isEqualToString:@"int32"]) {
-                hits = Scanner::findValue<int32_t>(region.start, region.size, [input intValue]);
-                valSize = 4;
-            } else if ([searchType isEqualToString:@"int16"]) {
-                hits = Scanner::findValue<int16_t>(region.start, region.size,
-                                                   (int16_t)[input intValue]);
-                valSize = 2;
-            } else if ([searchType isEqualToString:@"int64"]) {
-                hits =
-                    Scanner::findValue<int64_t>(region.start, region.size, [input longLongValue]);
-                valSize = 8;
-            } else if ([searchType isEqualToString:@"float"]) {
-                hits = Scanner::findValue<float>(region.start, region.size, [input floatValue]);
-                valSize = 4;
-            } else if ([searchType isEqualToString:@"double"]) {
-                hits = Scanner::findValue<double>(region.start, region.size, [input doubleValue]);
-                valSize = 8;
-            } else if ([searchType isEqualToString:@"hex"]) {
-                hits = Scanner::findPattern(region.start, region.size, [input UTF8String]);
-                valSize = 0;
-            } else {
-                hits = Scanner::findString(region.start, region.size, [input UTF8String]);
-                valSize = [input lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+        // Build plain-C structs to avoid C++ in blocks
+        struct RawRegion {
+            uintptr_t start;
+            size_t size;
+        };
+        NSMutableArray *validRegions = [NSMutableArray new];
+        for (auto &r : regions) {
+            if (r.size <= kMaxRegionSize) {
+                RawRegion rr{r.start, r.size};
+                [validRegions addObject:[NSData dataWithBytes:&rr length:sizeof(rr)]];
             }
+        }
 
-            for (auto addr : hits) {
-                if (totalHits < kMaxScanResults) {
-                    [localResults addObject:@(addr)];
+        // Parallel scan over regions using a concurrent queue + mutex for merging
+        dispatch_queue_t concurrentQ = dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
+        dispatch_group_t group = dispatch_group_create();
+
+        NSLock *lock = [NSLock new];
+        NSMutableArray *mergedResults = [NSMutableArray new];
+        NSMutableArray *mergedCandidates = [NSMutableArray new];
+        __block size_t totalHits = 0;
+        __block BOOL limitReached = NO;
+
+        for (NSData *rd in validRegions) {
+            dispatch_group_async(group, concurrentQ, ^{
+                struct RawRegion {
+                    uintptr_t start;
+                    size_t size;
+                } region;
+                memcpy(&region, rd.bytes, sizeof(region));
+
+                [lock lock];
+                BOOL skip = limitReached;
+                [lock unlock];
+                if (skip)
+                    return;
+
+                std::vector<uintptr_t> hits;
+                size_t valSize = 4;
+
+                if ([searchType isEqualToString:@"int32"]) {
+                    hits = Scanner::findValue<int32_t>(region.start, region.size, [input intValue]);
+                    valSize = 4;
+                } else if ([searchType isEqualToString:@"int16"]) {
+                    hits = Scanner::findValue<int16_t>(region.start, region.size,
+                                                       (int16_t)[input intValue]);
+                    valSize = 2;
+                } else if ([searchType isEqualToString:@"int64"]) {
+                    hits = Scanner::findValue<int64_t>(region.start, region.size,
+                                                       [input longLongValue]);
+                    valSize = 8;
+                } else if ([searchType isEqualToString:@"float"]) {
+                    hits = Scanner::findValue<float>(region.start, region.size, [input floatValue]);
+                    valSize = 4;
+                } else if ([searchType isEqualToString:@"double"]) {
+                    hits =
+                        Scanner::findValue<double>(region.start, region.size, [input doubleValue]);
+                    valSize = 8;
+                } else if ([searchType isEqualToString:@"hex"]) {
+                    hits = Scanner::findPattern(region.start, region.size, [input UTF8String]);
+                    valSize = 0;
+                } else if ([searchType isEqualToString:@"regex"]) {
+                    hits = Scanner::findRegex(region.start, region.size, [input UTF8String]);
+                    valSize = 0;
+                } else {
+                    hits = Scanner::findString(region.start, region.size, [input UTF8String]);
+                    valSize = [input lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+                }
+
+                if (hits.empty())
+                    return;
+
+                NSMutableArray *localR = [NSMutableArray arrayWithCapacity:hits.size()];
+                NSMutableArray *localC = [NSMutableArray arrayWithCapacity:hits.size()];
+                for (auto addr : hits) {
+                    [localR addObject:@(addr)];
                     NSMutableDictionary *c = [NSMutableDictionary new];
                     c[@"address"] = @(addr);
                     if (valSize > 0) {
@@ -143,20 +184,35 @@ static const size_t kMaxRegionSize = 100 * 1024 * 1024;
                         Memory::read(addr, buf, valSize);
                         c[@"snapshot"] = [NSData dataWithBytes:buf length:valSize];
                     }
-                    [localCandidates addObject:c];
+                    [localC addObject:c];
                 }
-                totalHits++;
-            }
-            if (totalHits >= kMaxScanResults)
-                break;
+
+                [lock lock];
+                totalHits += hits.size();
+                if (mergedResults.count < kMaxScanResults) {
+                    NSUInteger canAdd = kMaxScanResults - mergedResults.count;
+                    if (localR.count <= canAdd) {
+                        [mergedResults addObjectsFromArray:localR];
+                        [mergedCandidates addObjectsFromArray:localC];
+                    } else {
+                        [mergedResults
+                            addObjectsFromArray:[localR subarrayWithRange:NSMakeRange(0, canAdd)]];
+                        [mergedCandidates
+                            addObjectsFromArray:[localC subarrayWithRange:NSMakeRange(0, canAdd)]];
+                    }
+                }
+                if (totalHits >= kMaxScanResults)
+                    limitReached = YES;
+                [lock unlock];
+            });
         }
 
-        dispatch_async(dispatch_get_main_queue(), ^{
+        dispatch_group_notify(group, dispatch_get_main_queue(), ^{
             __strong typeof(weakSelf) strongSelf = weakSelf;
             if (!strongSelf)
                 return;
-            [strongSelf.results setArray:localResults];
-            [strongSelf.candidates setArray:localCandidates];
+            [strongSelf.results setArray:mergedResults];
+            [strongSelf.candidates setArray:mergedCandidates];
             strongSelf.searching = NO;
             strongSelf.hasResults = (totalHits > 0);
             strongSelf.isNarrowing = strongSelf.hasResults;
@@ -288,6 +344,46 @@ static const size_t kMaxRegionSize = 100 * 1024 * 1024;
 
 - (NSArray<NSString *> *)searchHistory {
     return [_history copy];
+}
+
+- (NSString *)exportResultsAsJSON {
+    if (!_results.count)
+        return nil;
+
+    NSMutableArray *items = [NSMutableArray arrayWithCapacity:_results.count];
+    for (NSNumber *addrNum in _results) {
+        uintptr_t addr = [addrNum unsignedLongLongValue];
+        uint8_t buf[8] = {};
+        Memory::read(addr, buf, [self currentValueSize]);
+        NSString *val = SYValueTypeUtil::formatValue(buf, _searchType);
+        [items addObject:@{
+            @"address" : [NSString stringWithFormat:@"0x%lX", addr],
+            @"value" : val,
+            @"type" : _searchType
+        }];
+    }
+
+    NSError *err = nil;
+    NSData *data = [NSJSONSerialization dataWithJSONObject:items
+                                                   options:NSJSONWritingPrettyPrinted
+                                                     error:&err];
+    if (!data || err)
+        return nil;
+
+    // Save to Documents/Shirayuki/
+    NSArray *paths =
+        NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+    NSString *docs = paths.firstObject;
+    NSString *dir = [docs stringByAppendingPathComponent:@"Shirayuki"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:dir
+                              withIntermediateDirectories:YES
+                                               attributes:nil
+                                                    error:nil];
+    NSTimeInterval ts = [[NSDate date] timeIntervalSince1970];
+    NSString *filename = [NSString stringWithFormat:@"results_%lld.json", (long long)ts];
+    NSString *path = [dir stringByAppendingPathComponent:filename];
+    [data writeToFile:path atomically:YES];
+    return path;
 }
 
 #pragma mark - Table

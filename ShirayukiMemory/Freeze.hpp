@@ -23,6 +23,10 @@ struct FreezeEntry {
     CompareMode condition = CompareMode::Exact;
     std::vector<uint8_t> threshold;
     std::function<void(uint64_t id, uintptr_t addr)> onTriggered;
+
+    // Auto-increment: each tick adds incrementStep to the current memory value
+    bool autoIncrement = false;
+    int64_t incrementStep = 1;
 };
 
 class FreezeManager {
@@ -65,6 +69,9 @@ class FreezeManager {
 
     // Update value for existing entry
     void updateValue(uint64_t id, const void *value, size_t len);
+
+    // Enable auto-increment on an entry
+    void setAutoIncrement(uint64_t id, bool enabled, int64_t step = 1);
 
     // Start/stop the freeze loop
     void start(uint32_t intervalMs = 16);
