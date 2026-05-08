@@ -101,16 +101,13 @@ static const size_t kMaxRegionSize = 100 * 1024 * 1024;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         auto regions = Memory::listRegionsFiltered(RegionFilter::ReadWrite);
 
-        // Build plain-C structs to avoid C++ in blocks
-        struct RawRegion {
-            uintptr_t start;
-            size_t size;
-        };
-        NSMutableArray *validRegions = [NSMutableArray new];
+        // Collect region start/size pairs as NSArrays to avoid C++ structs in blocks
+        NSMutableArray *regionStarts = [NSMutableArray new];
+        NSMutableArray *regionSizes = [NSMutableArray new];
         for (auto &r : regions) {
             if (r.size <= kMaxRegionSize) {
-                RawRegion rr{r.start, r.size};
-                [validRegions addObject:[NSData dataWithBytes:&rr length:sizeof(rr)]];
+                [regionStarts addObject:@(r.start)];
+                [regionSizes addObject:@(r.size)];
             }
         }
 
@@ -124,13 +121,12 @@ static const size_t kMaxRegionSize = 100 * 1024 * 1024;
         __block size_t totalHits = 0;
         __block BOOL limitReached = NO;
 
-        for (NSData *rd in validRegions) {
+        for (NSUInteger ri = 0; ri < regionStarts.count; ri++) {
+            uintptr_t rStart = [regionStarts[ri] unsignedLongLongValue];
+            size_t rSize = (size_t)[regionSizes[ri] unsignedLongLongValue];
             dispatch_group_async(group, concurrentQ, ^{
-                struct RawRegion {
-                    uintptr_t start;
-                    size_t size;
-                } region;
-                memcpy(&region, rd.bytes, sizeof(region));
+                uintptr_t regionStart = rStart;
+                size_t regionSize = rSize;
 
                 [lock lock];
                 BOOL skip = limitReached;
@@ -142,31 +138,30 @@ static const size_t kMaxRegionSize = 100 * 1024 * 1024;
                 size_t valSize = 4;
 
                 if ([searchType isEqualToString:@"int32"]) {
-                    hits = Scanner::findValue<int32_t>(region.start, region.size, [input intValue]);
+                    hits = Scanner::findValue<int32_t>(regionStart, regionSize, [input intValue]);
                     valSize = 4;
                 } else if ([searchType isEqualToString:@"int16"]) {
-                    hits = Scanner::findValue<int16_t>(region.start, region.size,
+                    hits = Scanner::findValue<int16_t>(regionStart, regionSize,
                                                        (int16_t)[input intValue]);
                     valSize = 2;
                 } else if ([searchType isEqualToString:@"int64"]) {
-                    hits = Scanner::findValue<int64_t>(region.start, region.size,
-                                                       [input longLongValue]);
+                    hits =
+                        Scanner::findValue<int64_t>(regionStart, regionSize, [input longLongValue]);
                     valSize = 8;
                 } else if ([searchType isEqualToString:@"float"]) {
-                    hits = Scanner::findValue<float>(region.start, region.size, [input floatValue]);
+                    hits = Scanner::findValue<float>(regionStart, regionSize, [input floatValue]);
                     valSize = 4;
                 } else if ([searchType isEqualToString:@"double"]) {
-                    hits =
-                        Scanner::findValue<double>(region.start, region.size, [input doubleValue]);
+                    hits = Scanner::findValue<double>(regionStart, regionSize, [input doubleValue]);
                     valSize = 8;
                 } else if ([searchType isEqualToString:@"hex"]) {
-                    hits = Scanner::findPattern(region.start, region.size, [input UTF8String]);
+                    hits = Scanner::findPattern(regionStart, regionSize, [input UTF8String]);
                     valSize = 0;
                 } else if ([searchType isEqualToString:@"regex"]) {
-                    hits = Scanner::findRegex(region.start, region.size, [input UTF8String]);
+                    hits = Scanner::findRegex(regionStart, regionSize, [input UTF8String]);
                     valSize = 0;
                 } else {
-                    hits = Scanner::findString(region.start, region.size, [input UTF8String]);
+                    hits = Scanner::findString(regionStart, regionSize, [input UTF8String]);
                     valSize = [input lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
                 }
 
