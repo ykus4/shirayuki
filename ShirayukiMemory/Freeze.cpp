@@ -1,5 +1,6 @@
 #include "Freeze.hpp"
 #include <chrono>
+#include <optional>
 
 namespace Shirayuki {
 
@@ -109,6 +110,11 @@ void FreezeManager::stop() {
 
 void FreezeManager::loop() {
     while (!m_stopRequested.load()) {
+        // Collect triggered callbacks outside the lock to avoid deadlock
+        std::vector<
+            std::pair<std::function<void(uint64_t, uintptr_t)>, std::pair<uint64_t, uintptr_t>>>
+            pendingCallbacks;
+
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             for (auto &entry : m_entries) {
@@ -116,7 +122,6 @@ void FreezeManager::loop() {
                     continue;
 
                 if (entry.hasCondition) {
-                    // Read current value and check condition
                     size_t sz = entry.value.size();
                     std::vector<uint8_t> current(sz);
                     if (Memory::read(entry.address, current.data(), sz) != Status::Success)
@@ -125,9 +130,7 @@ void FreezeManager::loop() {
                     bool shouldWrite = false;
                     switch (entry.condition) {
                         case CompareMode::GreaterThan:
-                            // Write when current > threshold
                             if (!entry.threshold.empty()) {
-                                // Simple memcmp for now (works for int types)
                                 int cmp = memcmp(current.data(), entry.threshold.data(),
                                                  std::min(sz, entry.threshold.size()));
                                 shouldWrite = (cmp > 0);
@@ -151,15 +154,21 @@ void FreezeManager::loop() {
                     if (shouldWrite) {
                         Memory::write(entry.address, entry.value.data(), entry.value.size());
                         if (entry.onTriggered) {
-                            entry.onTriggered(entry.id, entry.address);
+                            pendingCallbacks.push_back(
+                                {entry.onTriggered, {entry.id, entry.address}});
                         }
                     }
                 } else {
-                    // Unconditional freeze
                     Memory::write(entry.address, entry.value.data(), entry.value.size());
                 }
             }
         }
+
+        // Invoke callbacks after releasing lock
+        for (auto &[cb, args] : pendingCallbacks) {
+            cb(args.first, args.second);
+        }
+
         std::this_thread::sleep_for(std::chrono::milliseconds(m_intervalMs.load()));
     }
 }
@@ -174,13 +183,13 @@ size_t FreezeManager::count() const {
     return m_entries.size();
 }
 
-FreezeEntry *FreezeManager::getEntry(uint64_t id) {
+std::optional<FreezeEntry> FreezeManager::getEntry(uint64_t id) const {
     std::lock_guard<std::mutex> lock(m_mutex);
-    for (auto &entry : m_entries) {
+    for (const auto &entry : m_entries) {
         if (entry.id == id)
-            return &entry;
+            return entry;
     }
-    return nullptr;
+    return std::nullopt;
 }
 
 } // namespace Shirayuki

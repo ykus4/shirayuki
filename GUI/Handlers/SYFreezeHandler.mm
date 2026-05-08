@@ -3,6 +3,7 @@
 #import "SYResultCell.h"
 #import "SYTheme.h"
 #import "SYToast.h"
+#import "SYValueTypeUtil.h"
 #import "ShirayukiViewController.h"
 
 using namespace Shirayuki;
@@ -50,22 +51,21 @@ static NSString *const kCellID = @"SYCell";
     NSString *valStr = parts[1];
     NSString *typeStr = parts.count > 2 ? parts[2] : @"i32";
 
-    auto &fm = FreezeManager::shared();
+    // Map short type tags (f32/f64/i64/i32) to canonical names for util
+    NSDictionary *typeMap = @{
+        @"f32" : @"float",
+        @"f64" : @"double",
+        @"i64" : @"int64",
+        @"i32" : @"int32",
+        @"i16" : @"int16"
+    };
+    NSString *canonicalType = typeMap[typeStr] ?: typeStr;
+    ValueType vtype = SYValueTypeUtil::fromString(canonicalType);
+    uint8_t buf[8] = {};
+    size_t valSize = SYValueTypeUtil::parseValue(valStr, canonicalType, buf);
 
-    uint64_t fid = 0;
-    if ([typeStr isEqualToString:@"f32"]) {
-        float v = [valStr floatValue];
-        fid = fm.add(addr, &v, sizeof(float), ValueType::Float32, "");
-    } else if ([typeStr isEqualToString:@"f64"]) {
-        double v = [valStr doubleValue];
-        fid = fm.add(addr, &v, sizeof(double), ValueType::Float64, "");
-    } else if ([typeStr isEqualToString:@"i64"]) {
-        int64_t v = [valStr longLongValue];
-        fid = fm.add(addr, &v, sizeof(int64_t), ValueType::Int64, "");
-    } else {
-        int32_t v = [valStr intValue];
-        fid = fm.add(addr, &v, sizeof(int32_t), ValueType::Int32, "");
-    }
+    auto &fm = FreezeManager::shared();
+    uint64_t fid = fm.add(addr, buf, valSize, vtype, "");
 
     if (!fm.isRunning())
         fm.start(16);

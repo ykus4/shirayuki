@@ -5,6 +5,7 @@
 #include <atomic>
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <thread>
 
 namespace Shirayuki {
@@ -84,8 +85,8 @@ class FreezeManager {
     std::vector<FreezeEntry> entries() const;
     size_t count() const;
 
-    // Get single entry
-    FreezeEntry *getEntry(uint64_t id);
+    // Get single entry by value (thread-safe copy)
+    std::optional<FreezeEntry> getEntry(uint64_t id) const;
 
   private:
     FreezeManager() = default;

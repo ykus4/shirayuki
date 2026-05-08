@@ -33,6 +33,12 @@ static NSString *const kCellID = @"SYCell";
 
 @property (nonatomic, strong) NSArray<id<SYTabHandler>> *handlers;
 @property (nonatomic, assign) NSInteger currentTabIndex;
+
+// Typed handler accessors — safe against reordering
+@property (nonatomic, readonly) SYSearchHandler *searchHandler;
+@property (nonatomic, readonly) SYPatchHandler *patchHandler;
+@property (nonatomic, readonly) SYFreezeHandler *freezeHandler;
+@property (nonatomic, readonly) SYWatchHandler *watchHandler;
 @end
 
 @implementation ShirayukiViewController
@@ -76,6 +82,19 @@ static NSString *const kCellID = @"SYCell";
 
 - (id<SYTabHandler>)currentHandler {
     return _handlers[_currentTabIndex];
+}
+
+- (SYSearchHandler *)searchHandler {
+    return (SYSearchHandler *)_handlers[0];
+}
+- (SYPatchHandler *)patchHandler {
+    return (SYPatchHandler *)_handlers[1];
+}
+- (SYFreezeHandler *)freezeHandler {
+    return (SYFreezeHandler *)_handlers[2];
+}
+- (SYWatchHandler *)watchHandler {
+    return (SYWatchHandler *)_handlers[3];
 }
 
 #pragma mark - Build UI
@@ -337,7 +356,7 @@ static NSString *const kCellID = @"SYCell";
                    forState:UIControlStateNormal];
 
     // Show narrow bar only for search in narrowing mode
-    BOOL showNarrow = (_currentTabIndex == 0 && [(SYSearchHandler *)_handlers[0] isNarrowing]);
+    BOOL showNarrow = (_currentTabIndex == 0 && [self.searchHandler isNarrowing]);
     _narrowBar.hidden = !showNarrow;
 
     // Adjust row height
@@ -365,9 +384,8 @@ static NSString *const kCellID = @"SYCell";
 
 - (void)typeTapped {
     if (_currentTabIndex == 0) {
-        SYSearchHandler *sh = (SYSearchHandler *)_handlers[0];
-        [sh cycleType];
-        [_typeButton setTitle:[sh shortType] forState:UIControlStateNormal];
+        [self.searchHandler cycleType];
+        [_typeButton setTitle:[self.searchHandler shortType] forState:UIControlStateNormal];
         [UIView animateWithDuration:0.12
             animations:^{
                 self.typeButton.transform = CGAffineTransformMakeScale(1.2, 1.2);
@@ -393,23 +411,14 @@ static NSString *const kCellID = @"SYCell";
 }
 
 - (void)narrowTapped:(UIButton *)sender {
-    SYSearchHandler *sh = (SYSearchHandler *)_handlers[0];
-    switch (sender.tag) {
-        case 0:
-            [sh narrow:@"changed"];
-            break;
-        case 1:
-            [sh narrow:@"unchanged"];
-            break;
-        case 2:
-            [sh narrow:@"increased"];
-            break;
-        case 3:
-            [sh narrow:@"decreased"];
-            break;
-        case 4:
-            [sh resetSearch];
-            break;
+    static NSArray *modes = nil;
+    if (!modes)
+        modes = @[ @"changed", @"unchanged", @"increased", @"decreased" ];
+
+    if (sender.tag < (NSInteger)modes.count) {
+        [self.searchHandler narrow:modes[sender.tag]];
+    } else {
+        [self.searchHandler resetSearch];
     }
     [self updateForCurrentTab:NO];
 }
@@ -493,23 +502,22 @@ static NSString *const kCellID = @"SYCell";
                                                 [self reloadTable];
                                             }]];
 
-    [alert addAction:[UIAlertAction
-                         actionWithTitle:@"Freeze"
-                                   style:UIAlertActionStyleDefault
-                                 handler:^(UIAlertAction *a) {
-                                     NSString *val = alert.textFields.firstObject.text;
-                                     NSString *cmd =
-                                         [NSString stringWithFormat:@"0x%lX %@", addr, val];
-                                     [(SYFreezeHandler *)self.handlers[2] performAction:cmd];
-                                 }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Freeze"
+                                              style:UIAlertActionStyleDefault
+                                            handler:^(UIAlertAction *a) {
+                                                NSString *val = alert.textFields.firstObject.text;
+                                                NSString *cmd = [NSString
+                                                    stringWithFormat:@"0x%lX %@", addr, val];
+                                                [self.freezeHandler performAction:cmd];
+                                            }]];
 
-    [alert addAction:[UIAlertAction
-                         actionWithTitle:@"Watch"
-                                   style:UIAlertActionStyleDefault
-                                 handler:^(UIAlertAction *a) {
-                                     NSString *cmd = [NSString stringWithFormat:@"0x%lX", addr];
-                                     [(SYWatchHandler *)self.handlers[3] performAction:cmd];
-                                 }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Watch"
+                                              style:UIAlertActionStyleDefault
+                                            handler:^(UIAlertAction *a) {
+                                                NSString *cmd =
+                                                    [NSString stringWithFormat:@"0x%lX", addr];
+                                                [self.watchHandler performAction:cmd];
+                                            }]];
 
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
                                               style:UIAlertActionStyleCancel
