@@ -3,6 +3,7 @@
 #import "SYResultCell.h"
 #import "SYTheme.h"
 #import "SYToast.h"
+#import "SYValueTypeUtil.h"
 #import "ShirayukiViewController.h"
 
 using namespace Shirayuki;
@@ -50,22 +51,21 @@ static NSString *const kCellID = @"SYCell";
     NSString *valStr = parts[1];
     NSString *typeStr = parts.count > 2 ? parts[2] : @"i32";
 
-    auto &fm = FreezeManager::shared();
+    // Map short type tags (f32/f64/i64/i32) to canonical names for util
+    NSDictionary *typeMap = @{
+        @"f32" : @"float",
+        @"f64" : @"double",
+        @"i64" : @"int64",
+        @"i32" : @"int32",
+        @"i16" : @"int16"
+    };
+    NSString *canonicalType = typeMap[typeStr] ?: typeStr;
+    ValueType vtype = SYValueTypeUtil::fromString(canonicalType);
+    uint8_t buf[8] = {};
+    size_t valSize = SYValueTypeUtil::parseValue(valStr, canonicalType, buf);
 
-    uint64_t fid = 0;
-    if ([typeStr isEqualToString:@"f32"]) {
-        float v = [valStr floatValue];
-        fid = fm.add(addr, &v, sizeof(float), ValueType::Float32, "");
-    } else if ([typeStr isEqualToString:@"f64"]) {
-        double v = [valStr doubleValue];
-        fid = fm.add(addr, &v, sizeof(double), ValueType::Float64, "");
-    } else if ([typeStr isEqualToString:@"i64"]) {
-        int64_t v = [valStr longLongValue];
-        fid = fm.add(addr, &v, sizeof(int64_t), ValueType::Int64, "");
-    } else {
-        int32_t v = [valStr intValue];
-        fid = fm.add(addr, &v, sizeof(int32_t), ValueType::Int32, "");
-    }
+    auto &fm = FreezeManager::shared();
+    uint64_t fid = fm.add(addr, buf, valSize, vtype, "");
 
     if (!fm.isRunning())
         fm.start(16);
@@ -102,16 +102,22 @@ static NSString *const kCellID = @"SYCell";
 
     NSDictionary *entry = _entries[row];
     BOOL active = [entry[@"active"] boolValue];
+    BOOL autoInc = [entry[@"autoIncrement"] boolValue];
+
+    NSString *badgeText = autoInc ? @"INC" : (active ? @"FROZEN" : @"PAUSED");
+    UIColor *badgeColor =
+        autoInc ? [SYTheme warning] : (active ? [SYTheme accent] : [SYTheme textMuted]);
+    NSString *icon = autoInc ? @"arrow.up.circle.fill" : (active ? @"lock.fill" : @"lock.open");
+    UIColor *iconColor =
+        autoInc ? [SYTheme warning] : (active ? [SYTheme accent] : [SYTheme textMuted]);
 
     [cell
-        configureWithIcon:[SYTheme icon:active ? @"lock.fill" : @"lock.open"
-                                   size:14
-                                  color:active ? [SYTheme accent] : [SYTheme textMuted]]
+        configureWithIcon:[SYTheme icon:icon size:14 color:iconColor]
                     title:[NSString
                               stringWithFormat:@"0x%llX", [entry[@"address"] unsignedLongLongValue]]
                    detail:[NSString stringWithFormat:@"= %@ (%@)", entry[@"value"], entry[@"type"]]
-                    badge:active ? @"FROZEN" : @"PAUSED"
-               badgeColor:active ? [SYTheme accent] : [SYTheme textMuted]];
+                    badge:badgeText
+               badgeColor:badgeColor];
     return cell;
 }
 
@@ -144,6 +150,20 @@ static NSString *const kCellID = @"SYCell";
     [UIPasteboard generalPasteboard].string =
         [NSString stringWithFormat:@"0x%lX", (unsigned long)addr];
     [SYToast show:@"Address copied" type:SYToastInfo];
+}
+
+- (void)toggleAutoIncrementForRow:(NSInteger)row {
+    if (row >= (NSInteger)_entries.count)
+        return;
+    NSMutableDictionary *entry = _entries[row];
+    uint64_t fid = [entry[@"id"] unsignedLongLongValue];
+    BOOL current = [entry[@"autoIncrement"] boolValue];
+    BOOL next = !current;
+    entry[@"autoIncrement"] = @(next);
+    FreezeManager::shared().setAutoIncrement(fid, next, 1);
+    NSString *msg = next ? @"Auto-increment ON" : @"Auto-increment OFF";
+    [SYToast show:msg type:next ? SYToastSuccess : SYToastInfo];
+    [self.viewController reloadTable];
 }
 
 @end

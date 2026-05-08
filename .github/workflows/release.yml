@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  release:
+    runs-on: macos-latest
+
+    env:
+      THEOS: ${{ github.workspace }}/theos
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Cache Theos
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/theos
+          key: theos-${{ runner.os }}-${{ hashFiles('.github/workflows/release.yml') }}
+
+      - name: Install Theos
+        run: |
+          if [ ! -d "$THEOS" ]; then
+            git clone --recursive https://github.com/theos/theos.git "$THEOS"
+          fi
+
+      - name: Cache SDKs
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/theos/sdks
+          key: theos-sdks-${{ runner.os }}-iPhoneOS16.5
+
+      - name: Download iOS SDK
+        run: |
+          if [ ! -d "$THEOS/sdks/iPhoneOS16.5.sdk" ]; then
+            curl -L -o sdk.tar.xz \
+              https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5.sdk.tar.xz
+            tar -xJf sdk.tar.xz -C "$THEOS/sdks"
+            rm sdk.tar.xz
+          fi
+
+      - name: Install ldid
+        run: brew install ldid
+
+      - name: Build package
+        run: make clean && make package
+
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(grep '^Version:' layout/DEBIAN/control | awk '{print $2}')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Shirayuki ${{ steps.version.outputs.tag }}
+          body: |
+            ## Install
+            Download the `.deb` file and install via `dpkg -i` or a file manager on your jailbroken device.
+
+            **Requirements**: Jailbroken iOS 15.0+ (arm64), Substrate or Substitute
+          files: packages/*.deb
+          fail_on_unmatched_files: true
