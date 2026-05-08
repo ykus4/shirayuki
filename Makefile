@@ -18,6 +18,7 @@ Shirayuki_FILES = Tweak/Tweak.xm \
 	GUI/SYResultCell.m \
 	GUI/SYDragButton.m \
 	GUI/SYToast.m \
+	GUI/Handlers/SYScanHelper.cpp \
 	GUI/Handlers/SYSearchHandler.mm \
 	GUI/Handlers/SYPatchHandler.mm \
 	GUI/Handlers/SYFreezeHandler.mm \
