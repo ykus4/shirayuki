@@ -4,7 +4,6 @@
 #include <dlfcn.h>
 #include <iomanip>
 #include <libkern/OSCacheControl.h>
-#include <mach/mach_vm.h>
 #include <mach/vm_map.h>
 #include <sstream>
 
@@ -23,9 +22,8 @@ Status Memory::read(uintptr_t address, void *buffer, size_t len) {
         return Status::InvalidLength;
 
     vm_size_t outSize = 0;
-    kern_return_t kr =
-        mach_vm_read_overwrite(mach_task_self(), (mach_vm_address_t)address, (mach_vm_size_t)len,
-                               (mach_vm_address_t)buffer, &outSize);
+    kern_return_t kr = vm_read_overwrite(mach_task_self(), (vm_address_t)address, (vm_size_t)len,
+                                         (vm_address_t)buffer, &outSize);
 
     return (kr == KERN_SUCCESS) ? Status::Success : Status::Failed;
 }
@@ -39,8 +37,8 @@ Status Memory::write(uintptr_t address, const void *buffer, size_t len) {
         return Status::InvalidLength;
 
     // Try direct write first
-    kern_return_t kr = mach_vm_write(mach_task_self(), (mach_vm_address_t)address,
-                                     (vm_offset_t)buffer, (mach_msg_type_number_t)len);
+    kern_return_t kr = vm_write(mach_task_self(), (vm_address_t)address, (vm_offset_t)buffer,
+                                (mach_msg_type_number_t)len);
 
     if (kr == KERN_SUCCESS) {
         sys_icache_invalidate((void *)address, len);
@@ -48,34 +46,34 @@ Status Memory::write(uintptr_t address, const void *buffer, size_t len) {
     }
 
     // Save original protection before modifying
-    mach_vm_address_t pageStart = address & ~(vm_page_size - 1);
-    mach_vm_size_t pageLen = (address + len - pageStart + vm_page_size - 1) & ~(vm_page_size - 1);
+    vm_address_t pageStart = address & ~(vm_page_size - 1);
+    vm_size_t pageLen = (address + len - pageStart + vm_page_size - 1) & ~(vm_page_size - 1);
 
     // Query current protection
-    mach_vm_address_t regionAddr = pageStart;
-    mach_vm_size_t regionSize = 0;
+    vm_address_t regionAddr = pageStart;
+    vm_size_t regionSize = 0;
     uint32_t depth = 0;
     vm_region_submap_short_info_data_64_t info;
     mach_msg_type_number_t count = VM_REGION_SUBMAP_SHORT_INFO_COUNT_64;
     vm_prot_t origProt = VM_PROT_READ | VM_PROT_EXECUTE; // fallback
 
-    kern_return_t infoKr = mach_vm_region_recurse(mach_task_self(), &regionAddr, &regionSize,
-                                                  &depth, (vm_region_recurse_info_t)&info, &count);
+    kern_return_t infoKr = vm_region_recurse_64(mach_task_self(), &regionAddr, &regionSize, &depth,
+                                                (vm_region_recurse_info_t)&info, &count);
     if (infoKr == KERN_SUCCESS) {
         origProt = info.protection;
     }
 
     // Set writable
-    kr = mach_vm_protect(mach_task_self(), pageStart, pageLen, false,
-                         VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
+    kr = vm_protect(mach_task_self(), pageStart, pageLen, false,
+                    VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
     if (kr != KERN_SUCCESS)
         return Status::ProtectionFailed;
 
-    kr = mach_vm_write(mach_task_self(), (mach_vm_address_t)address, (vm_offset_t)buffer,
-                       (mach_msg_type_number_t)len);
+    kr = vm_write(mach_task_self(), (vm_address_t)address, (vm_offset_t)buffer,
+                  (mach_msg_type_number_t)len);
 
     // Restore original protection
-    mach_vm_protect(mach_task_self(), pageStart, pageLen, false, origProt);
+    vm_protect(mach_task_self(), pageStart, pageLen, false, origProt);
 
     if (kr == KERN_SUCCESS) {
         sys_icache_invalidate((void *)address, len);
@@ -87,14 +85,14 @@ Status Memory::write(uintptr_t address, const void *buffer, size_t len) {
 
 RegionInfo Memory::getRegionInfo(uintptr_t address) {
     RegionInfo ri{};
-    mach_vm_address_t addr = (mach_vm_address_t)address;
-    mach_vm_size_t size = 0;
+    vm_address_t addr = (vm_address_t)address;
+    vm_size_t size = 0;
     uint32_t depth = 0;
     vm_region_submap_short_info_data_64_t info;
     mach_msg_type_number_t count = VM_REGION_SUBMAP_SHORT_INFO_COUNT_64;
 
-    kern_return_t kr = mach_vm_region_recurse(mach_task_self(), &addr, &size, &depth,
-                                              (vm_region_recurse_info_t)&info, &count);
+    kern_return_t kr = vm_region_recurse_64(mach_task_self(), &addr, &size, &depth,
+                                            (vm_region_recurse_info_t)&info, &count);
 
     if (kr == KERN_SUCCESS) {
         ri.start = (uintptr_t)addr;
@@ -106,23 +104,23 @@ RegionInfo Memory::getRegionInfo(uintptr_t address) {
 }
 
 Status Memory::protect(uintptr_t address, size_t len, vm_prot_t prot) {
-    kern_return_t kr = mach_vm_protect(mach_task_self(), (mach_vm_address_t)address,
-                                       (mach_vm_size_t)len, false, prot);
+    kern_return_t kr =
+        vm_protect(mach_task_self(), (vm_address_t)address, (vm_size_t)len, false, prot);
     return (kr == KERN_SUCCESS) ? Status::Success : Status::ProtectionFailed;
 }
 
 std::vector<RegionInfo> Memory::listRegions(vm_prot_t requiredProt) {
     std::vector<RegionInfo> regions;
-    mach_vm_address_t addr = 0;
-    mach_vm_size_t size = 0;
+    vm_address_t addr = 0;
+    vm_size_t size = 0;
 
     while (true) {
         uint32_t depth = 0;
         vm_region_submap_short_info_data_64_t info;
         mach_msg_type_number_t count = VM_REGION_SUBMAP_SHORT_INFO_COUNT_64;
 
-        kern_return_t kr = mach_vm_region_recurse(mach_task_self(), &addr, &size, &depth,
-                                                  (vm_region_recurse_info_t)&info, &count);
+        kern_return_t kr = vm_region_recurse_64(mach_task_self(), &addr, &size, &depth,
+                                                (vm_region_recurse_info_t)&info, &count);
         if (kr != KERN_SUCCESS)
             break;
 
