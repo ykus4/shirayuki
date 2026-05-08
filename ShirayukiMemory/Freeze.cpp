@@ -12,17 +12,15 @@ FreezeManager::~FreezeManager() {
     stop();
 }
 
-uint64_t FreezeManager::add(uintptr_t address, const void *value, size_t len,
-                            ValueType type, const std::string &label) {
+uint64_t FreezeManager::add(uintptr_t address, const void *value, size_t len, ValueType type,
+                            const std::string &label) {
     std::lock_guard<std::mutex> lock(m_mutex);
 
     FreezeEntry entry;
     entry.id = m_nextId++;
     entry.address = address;
-    entry.value.assign(
-        reinterpret_cast<const uint8_t *>(value),
-        reinterpret_cast<const uint8_t *>(value) + len
-    );
+    entry.value.assign(reinterpret_cast<const uint8_t *>(value),
+                       reinterpret_cast<const uint8_t *>(value) + len);
     entry.type = type;
     entry.label = label;
     entry.active = true;
@@ -32,27 +30,23 @@ uint64_t FreezeManager::add(uintptr_t address, const void *value, size_t len,
 }
 
 uint64_t FreezeManager::addConditional(uintptr_t address, const void *value, size_t len,
-                                       ValueType type, CompareMode condition,
-                                       const void *threshold, size_t thresholdLen,
+                                       ValueType type, CompareMode condition, const void *threshold,
+                                       size_t thresholdLen,
                                        std::function<void(uint64_t, uintptr_t)> callback) {
     std::lock_guard<std::mutex> lock(m_mutex);
 
     FreezeEntry entry;
     entry.id = m_nextId++;
     entry.address = address;
-    entry.value.assign(
-        reinterpret_cast<const uint8_t *>(value),
-        reinterpret_cast<const uint8_t *>(value) + len
-    );
+    entry.value.assign(reinterpret_cast<const uint8_t *>(value),
+                       reinterpret_cast<const uint8_t *>(value) + len);
     entry.type = type;
     entry.active = true;
     entry.hasCondition = true;
     entry.condition = condition;
     if (threshold && thresholdLen > 0) {
-        entry.threshold.assign(
-            reinterpret_cast<const uint8_t *>(threshold),
-            reinterpret_cast<const uint8_t *>(threshold) + thresholdLen
-        );
+        entry.threshold.assign(reinterpret_cast<const uint8_t *>(threshold),
+                               reinterpret_cast<const uint8_t *>(threshold) + thresholdLen);
     }
     entry.onTriggered = callback;
 
@@ -62,11 +56,9 @@ uint64_t FreezeManager::addConditional(uintptr_t address, const void *value, siz
 
 void FreezeManager::remove(uint64_t id) {
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_entries.erase(
-        std::remove_if(m_entries.begin(), m_entries.end(),
-                       [id](const FreezeEntry &e) { return e.id == id; }),
-        m_entries.end()
-    );
+    m_entries.erase(std::remove_if(m_entries.begin(), m_entries.end(),
+                                   [id](const FreezeEntry &e) { return e.id == id; }),
+                    m_entries.end());
 }
 
 void FreezeManager::removeAll() {
@@ -88,10 +80,8 @@ void FreezeManager::updateValue(uint64_t id, const void *value, size_t len) {
     std::lock_guard<std::mutex> lock(m_mutex);
     for (auto &entry : m_entries) {
         if (entry.id == id) {
-            entry.value.assign(
-                reinterpret_cast<const uint8_t *>(value),
-                reinterpret_cast<const uint8_t *>(value) + len
-            );
+            entry.value.assign(reinterpret_cast<const uint8_t *>(value),
+                               reinterpret_cast<const uint8_t *>(value) + len);
             break;
         }
     }
@@ -100,7 +90,8 @@ void FreezeManager::updateValue(uint64_t id, const void *value, size_t len) {
 void FreezeManager::start(uint32_t intervalMs) {
     // Prevent double-start race
     bool expected = false;
-    if (!m_running.compare_exchange_strong(expected, true)) return;
+    if (!m_running.compare_exchange_strong(expected, true))
+        return;
 
     m_intervalMs.store(intervalMs);
     m_stopRequested.store(false);
@@ -121,13 +112,15 @@ void FreezeManager::loop() {
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             for (auto &entry : m_entries) {
-                if (!entry.active) continue;
+                if (!entry.active)
+                    continue;
 
                 if (entry.hasCondition) {
                     // Read current value and check condition
                     size_t sz = entry.value.size();
                     std::vector<uint8_t> current(sz);
-                    if (Memory::read(entry.address, current.data(), sz) != Status::Success) continue;
+                    if (Memory::read(entry.address, current.data(), sz) != Status::Success)
+                        continue;
 
                     bool shouldWrite = false;
                     switch (entry.condition) {
@@ -184,7 +177,8 @@ size_t FreezeManager::count() const {
 FreezeEntry *FreezeManager::getEntry(uint64_t id) {
     std::lock_guard<std::mutex> lock(m_mutex);
     for (auto &entry : m_entries) {
-        if (entry.id == id) return &entry;
+        if (entry.id == id)
+            return &entry;
     }
     return nullptr;
 }

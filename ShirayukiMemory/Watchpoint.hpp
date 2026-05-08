@@ -2,11 +2,11 @@
 #define SHIRAYUKI_WATCHPOINT_HPP
 
 #include "ShirayukiMemory.hpp"
+#include <atomic>
+#include <chrono>
+#include <functional>
 #include <mutex>
 #include <thread>
-#include <atomic>
-#include <functional>
-#include <chrono>
 
 namespace Shirayuki {
 
@@ -31,7 +31,7 @@ struct WatchEntry {
 using WatchCallback = std::function<void(const WatchEntry &entry)>;
 
 class WatchManager {
-public:
+  public:
     static WatchManager &shared();
     ~WatchManager();
 
@@ -51,7 +51,9 @@ public:
     // Start/stop polling
     void start(uint32_t intervalMs = 100);
     void stop();
-    bool isRunning() const { return m_running.load(); }
+    bool isRunning() const {
+        return m_running.load();
+    }
 
     // Get entries
     std::vector<WatchEntry> entries() const;
@@ -60,7 +62,7 @@ public:
     // Read current value as string for display
     static std::string formatValue(const WatchEntry &entry);
 
-private:
+  private:
     WatchManager() = default;
     void loop();
 
