@@ -13,7 +13,7 @@ Shirayuki_FILES = Tweak/Tweak.xm \
 	ShirayukiMemory/Watchpoint.cpp \
 	ShirayukiMemory/Session.mm \
 	GUI/ShirayukiWindow.m \
-	GUI/ShirayukiViewController.m \
+	GUI/ShirayukiViewController.mm \
 	GUI/SYTheme.m \
 	GUI/SYResultCell.m \
 	GUI/SYDragButton.m \
