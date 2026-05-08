@@ -1,81 +1,117 @@
-# shirayuki
+# ❄️ Shirayuki
 
 <p align="center">
-  <img src="assets/icon.png" width="320" alt="shirayuki icon" />
+  <img src="assets/icon.png" width="180" alt="shirayuki icon" />
+</p>
+
+<p align="center">
+  <b>In-app memory toolkit overlay for jailbroken iOS</b>
 </p>
 
 <p align="center">
   <img src="https://github.com/ykus4/shirayuki/actions/workflows/build.yml/badge.svg" alt="Build" />
   <img src="https://github.com/ykus4/shirayuki/actions/workflows/format.yml/badge.svg" alt="Format Check" />
+  <img src="https://img.shields.io/badge/platform-iOS%2015%2B-blue?style=flat" />
+  <img src="https://img.shields.io/badge/arch-arm64-lightgrey?style=flat" />
+  <img src="https://img.shields.io/badge/language-ObjC%2B%2B-orange?style=flat" />
 </p>
 
-KittyMemory-inspired memory toolkit for jailbroken iOS. Theos tweak with in-app overlay GUI.
+---
+
+## What is this?
+
+Shirayuki injects a **floating overlay panel** into any app on a jailbroken iPhone. No respring required per session — just tap the snowflake button and start hacking.
+
+```
+┌─────────────────────────────────────────────┐
+│  Target App                                 │
+│                                             │
+│           ┌──────────────────────┐          │
+│           │  ❄️  Shirayuki Panel  │          │
+│           │  ┌──┬──┬──┬──┬──┬──┐│          │
+│           │  │🔍│🔧│🔒│👁│🌿│💾││          │
+│           │  └──┴──┴──┴──┴──┴──┘│          │
+│           │  [Search tab shown]  │          │
+│           │  > int32  [ Scan ]   │          │
+│           │  0x1A2B3C4D  = 100   │          │
+│           │  0x1A2B3C50  = 100   │          │
+│           └──────────────────────┘          │
+│                              ❄️ ←drag       │
+└─────────────────────────────────────────────┘
+```
 
 ---
 
 ## Features
 
-| Category | Details |
-|----------|---------|
-| **Memory R/W** | Mach VM API, auto page-protection save/restore, typed read/write |
-| **Pattern Scan** | IDA-style with `??` wildcards, anchor-byte skip optimization |
-| **Value Scan** | i8/i16/i32/i64/u8/u16/u32/u64/f32/f64 |
-| **Narrowing** | Changed / Unchanged / Increased / Decreased / Exact filter |
-| **Patch** | Apply/restore with backup, NOP sled (ARM64), per-patch toggle |
-| **Freeze** | Lock values at 60fps, per-entry pause, conditional triggers |
-| **Watchpoint** | Real-time value monitor with change counter |
-| **Pointer Scan** | Recursive chain finder, ASLR-independent, configurable depth |
-| **Disassembly** | Built-in ARM64 decoder (B/BL/B.cond/MOV/STP/LDP/RET/NOP) |
-| **Session** | Save/load bookmarks, patches, freezes, pointer chains to JSON |
-| **Overlay GUI** | Floating panel, dark+cyan theme, SF Symbols, 6 tabs, drag-to-move |
-| **Toast** | In-app notifications with haptic feedback |
-| **Symbol Lookup** | dlsym-based symbol resolution from loaded images |
-
----
-
-## GUI Tabs
-
-| Tab | Function |
-|-----|----------|
-| **Search** | Scan by type (i32/f32/i64/etc), narrow with filter buttons, batch modify, tap to write/freeze/watch |
-| **Patch** | Hex patch at address, toggle on/off, restore original, swipe to delete |
-| **Freeze** | Lock address to value (supports i32/f32/f64/i64), tap to pause, conditional threshold mode |
-| **Watch** | Monitor addresses in real-time, track change count, auto-refresh |
-| **Ptr** | Pointer chain scan with configurable depth/offset, validate & copy |
-| **Dump** | Hex dump or ARM64 disassembly (`0xADDR asm`), long-press to NOP |
-
----
-
-## Project Structure
+### 🔍 Search & Narrow
 
 ```
-shirayuki/
-├── Makefile
-├── Shirayuki.plist
-├── ShirayukiMemory/
-│   ├── ShirayukiMemory.hpp/cpp    — Core (read/write/scan/patch/disasm)
-│   ├── Freeze.hpp/cpp             — Value freeze + conditional triggers
-│   ├── Watchpoint.hpp/cpp         — Real-time value monitor
-│   ├── PointerScan.hpp/cpp        — Pointer chain scanner
-│   └── Session.hpp/mm             — JSON session persistence
-├── GUI/
-│   ├── SYTheme.h/m                — Colors, fonts, icons
-│   ├── SYResultCell.h/m           — Card-style table cell
-│   ├── SYDragButton.h/m           — Floating toggle (edge-snap, haptic)
-│   ├── SYToast.h/m                — Toast notifications
-│   ├── SYTabHandler.h             — Tab handler protocol
-│   ├── ShirayukiWindow.h/m        — Overlay UIWindow
-│   ├── ShirayukiViewController.h/m — Main panel (handler-based)
-│   └── Handlers/
-│       ├── SYSearchHandler.h/mm   — Search + narrowing + batch
-│       ├── SYPatchHandler.h/mm    — Hex patching
-│       ├── SYFreezeHandler.h/mm   — Freeze management
-│       ├── SYWatchHandler.h/mm    — Watchpoints
-│       ├── SYPointerHandler.h/mm  — Pointer scan
-│       └── SYDumpHandler.h/mm     — Hex dump + disassembly
-├── Tweak/
-│   └── Tweak.xm                   — Entry point
-└── layout/DEBIAN/control
+First scan         →  Narrow: Changed     →  Narrow: Exact 42
+──────────────        ──────────────────     ────────────────
+2000 results          87 results             3 results
+0x1A001234            0x1A001234             0x1A001234  ✓
+0x1A001238            0x1A001238             0x1A005580  ✓
+0x1A001240            ...                    0x1B000020  ✓
+...
+```
+
+| Type | Input example |
+|---|---|
+| `int32` `int16` `int64` | `100` |
+| `float` `double` | `3.14` |
+| `hex` (IDA pattern) | `FF 43 01 D1 ?? ?? ??` |
+| `string` | `PlayerName` |
+| `regex` | `HP:[0-9]+` |
+
+### 🔧 Patch + Undo/Redo
+
+```
+Address      Original       Patched        State
+──────────── ────────────── ────────────── ──────
+0x1A001234   FF 43 01 D1    1F 20 03 D5    ✅ ON
+0x1A005580   E0 03 00 AA    1F 20 03 D5    ⏸ OFF
+             ↑ auto backup                 ↑ toggle
+
+[Undo] → restore last patch
+[Redo] → reapply
+```
+
+### 🔒 Freeze + Auto-Increment
+
+```
+0x1A001234  =  99999  (float)  [FROZEN]   ← tap to pause
+0x1A001238  =  1      (int32)  [INC +1]   ← auto-increment each tick
+0x1A00123C  =  100    (int32)  [PAUSED]   ← frozen but inactive
+```
+
+### 👁 Watch (real-time diff)
+
+```
+0x1A001234   float    42.0 → 43.0   ▲  (changed 7x)
+0x1A001238   int32    99  → 99      ·  (unchanged)
+0x1A00123C   int32    0   → 255     ▲  (changed 1x)
+```
+
+### 🌿 Pointer Scan
+
+```
+Target: 0x1A001234
+
+Chain 1: [UnityFramework + 0x1234AB] → +0x10 → +0x28 → +0x00  ✓
+Chain 2: [GameLib + 0xABCD00] → +0x08 → +0x00                  ✓
+Chain 3: [GameLib + 0xABCD10] → +0x08 → +0x00                  ??
+```
+
+### 💾 Hex Dump & Disassembly
+
+```
+0xADDR len      →  hex dump
+0xADDR asm      →  ARM64 disassembly
+
+0x1A001234  FF 43 01 D1   STP  x29, x30, [sp, #-0x10]!
+0x1A001238  FD 03 00 91   MOV  x29, sp
+0x1A00123C  1F 20 03 D5   NOP                           ← long-press to NOP
 ```
 
 ---
@@ -83,11 +119,20 @@ shirayuki/
 ## Quick Start
 
 ```bash
-# 1. Set target bundle in Shirayuki.plist
-# 2. Build and install
-make package install
+# Set device IP
+export THEOS_DEVICE_IP=192.168.x.x
 
-# 3. Open target app, tap the floating snowflake button
+# Build + install + respring
+make package install
+```
+
+To restrict which app Shirayuki injects into, edit `Shirayuki.plist`:
+
+```xml
+<key>Bundles</key>
+<array>
+  <string>com.example.targetapp</string>
+</array>
 ```
 
 ---
@@ -97,75 +142,85 @@ make package install
 ```cpp
 using namespace Shirayuki;
 
-// Image + pattern scan
-auto img = Image::find("UnityFramework");
+// Pattern scan
+auto img  = Image::find("UnityFramework");
 auto hits = Scanner::findPatternInImage(img, "FF 43 01 D1 ?? ?? ??");
 
-// Patch
-auto p = Patch::createNop(Image::absoluteAddress(img, 0x123456), 2);
-p.apply();
+// Patch (NOP 2 instructions)
+Patch::createNop(Image::absoluteAddress(img, 0x123456), 2).apply();
 
-// Value search + narrowing
-auto results = Scanner::findValue<int32_t>(region.start, region.size, 100);
-auto narrowed = Scanner::narrowResults(candidates, ValueType::Int32, CompareMode::Decreased);
+// Value search
+auto results = Scanner::findValue<float>(region.start, region.size, 99.0f);
 
-// Freeze (unconditional)
+// Freeze
 FreezeManager::shared().addValue<float>(addr, 99999.0f);
-FreezeManager::shared().start();
+FreezeManager::shared().start(16); // 16ms tick
 
-// Freeze (conditional: write when value > threshold)
-int32_t threshold = 50;
-FreezeManager::shared().addConditional(addr, &maxVal, 4, ValueType::Int32,
-    CompareMode::GreaterThan, &threshold, 4, [](uint64_t id, uintptr_t a) {
-        NSLog(@"Triggered!");
-    });
-
-// Watchpoint
+// Watch
 WatchManager::shared().add(addr, ValueType::Float32);
 WatchManager::shared().setCallback([](const WatchEntry &e) {
-    NSLog(@"Changed: %s", WatchManager::formatValue(e).c_str());
+    // e.previousValue, e.currentValue, e.changeCount
 });
-WatchManager::shared().start();
 
 // Pointer scan
-PointerScanConfig cfg;
-cfg.targetAddress = addr;
-cfg.maxDepth = 3;
+PointerScanConfig cfg{ .targetAddress = addr, .maxDepth = 3 };
 auto chains = PointerScanner::scan(cfg);
-// chains[0].resolve() gives runtime address
 
-// Disassembly
-auto insns = Disasm::disassemble(addr, 10);
-
-// Symbol lookup
-uintptr_t sym = Image::findSymbol("UnityFramework", "_il2cpp_class_from_name");
-
-// Session save/load
-Session session;
-session.name = "my_cheats";
+// Session
 SessionManager::save(session, SessionManager::autoSavePath("com.example.app"));
 ```
 
 ---
 
-## Requirements
+## Project Structure
 
-- Jailbroken iOS 15.0–16.x (arm64)
-- [Theos](https://theos.dev)
-- Substrate or Substitute
-
-## Development
-
-```bash
-# Format all source files
-make fmt
-
-# Check formatting (CI uses this)
-make fmt-check
+```
+shirayuki/
+├── Tweak/Tweak.xm                     ← injection entry (Logos)
+├── ShirayukiMemory/
+│   ├── ShirayukiMemory.hpp/cpp        ← Mach VM, scan, patch, disasm
+│   ├── Freeze.hpp/cpp                 ← value locker + auto-increment
+│   ├── Watchpoint.hpp/cpp             ← polling monitor
+│   ├── PointerScan.hpp/cpp            ← chain finder
+│   └── Session.hpp/mm                 ← JSON persistence
+└── GUI/
+    ├── ShirayukiViewController.mm     ← main panel + tab routing
+    ├── SYTheme / SYToast / SYDragButton
+    └── Handlers/
+        ├── SYScanHelper.cpp           ← C++ isolation layer
+        ├── SYSearchHandler.mm         ← search + narrow + batch
+        ├── SYPatchHandler.mm          ← patch + undo/redo
+        ├── SYFreezeHandler.mm         ← freeze + auto-increment
+        ├── SYWatchHandler.mm          ← watchpoints
+        ├── SYPointerHandler.mm        ← pointer chains
+        └── SYDumpHandler.mm           ← hex dump + disassembly
 ```
 
 ---
 
-## Disclaimer
+## CI / Release
 
-For security research, CTF challenges, and educational use on devices you own.
+| Workflow | Trigger | Result |
+|---|---|---|
+| **Build** | push / PR → `main`, `dev` | artifact `.deb` + PR comment |
+| **Format** | push / PR | clang-format check |
+| **Release** | `git tag v*` | GitHub Release with `.deb` |
+
+```bash
+# Cut a release
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+Dev builds are versioned as `0.1.0-dev.N+sha7` automatically.
+
+---
+
+## Requirements
+
+- Jailbroken iOS 15.0+ arm64
+- [Theos](https://theos.dev)
+- Substrate or Substitute
+
+---
+
+> For security research, CTF challenges, and educational use on devices you own.
