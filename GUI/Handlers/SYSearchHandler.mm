@@ -225,24 +225,27 @@ static NSString *const kCellID = @"SYCell";
 
 - (void)narrowExact:(NSString *)input {
     size_t valSize = [self currentValueSize];
-    uint8_t target[8] = {};
+    uint8_t targetBuf[8] = {};
 
     if ([_searchType isEqualToString:@"int32"]) {
         int32_t v = [input intValue];
-        memcpy(target, &v, 4);
+        memcpy(targetBuf, &v, 4);
     } else if ([_searchType isEqualToString:@"float"]) {
         float v = [input floatValue];
-        memcpy(target, &v, 4);
+        memcpy(targetBuf, &v, 4);
     } else if ([_searchType isEqualToString:@"int64"]) {
         int64_t v = [input longLongValue];
-        memcpy(target, &v, 8);
+        memcpy(targetBuf, &v, 8);
     } else if ([_searchType isEqualToString:@"double"]) {
         double v = [input doubleValue];
-        memcpy(target, &v, 8);
+        memcpy(targetBuf, &v, 8);
     }
+
+    NSData *targetData = [NSData dataWithBytes:targetBuf length:valSize];
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSMutableArray *kept = [NSMutableArray new];
+        const void *target = targetData.bytes;
 
         for (NSMutableDictionary *c in self.candidates) {
             uintptr_t addr = [c[@"address"] unsignedLongLongValue];
