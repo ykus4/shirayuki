@@ -100,42 +100,27 @@ static const size_t kMaxRegionSize = 100 * 1024 * 1024;
     __weak typeof(self) weakSelf = self;
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        auto regions = Memory::listRegionsFiltered(RegionFilter::ReadWrite);
-        size_t totalHits = 0;
-        NSMutableArray *localResults = [NSMutableArray new];
-        NSMutableArray *localCandidates = [NSMutableArray new];
+        // SYScanAll is a plain C function — no C++ syntax in this block
+        size_t count = 0, valSize = 4;
+        uintptr_t *hits = SYScanAll([searchType UTF8String], [input UTF8String], kMaxScanResults,
+                                    kMaxRegionSize, &count, &valSize);
 
-        const char *typeC = [searchType UTF8String];
-        const char *inputC = [input UTF8String];
+        NSMutableArray *localResults = [NSMutableArray arrayWithCapacity:count];
+        NSMutableArray *localCandidates = [NSMutableArray arrayWithCapacity:count];
 
-        for (size_t i = 0; i < regions.size(); i++) {
-            if (regions[i].size > kMaxRegionSize)
-                continue;
-            if (totalHits >= kMaxScanResults)
-                break;
-
-            size_t count = 0, valSize = 4;
-            uintptr_t *hits =
-                SYScanRegion(regions[i].start, regions[i].size, typeC, inputC, &count, &valSize);
-            if (!hits) {
-                continue;
+        for (size_t k = 0; k < count; k++) {
+            uintptr_t addr = hits[k];
+            [localResults addObject:@(addr)];
+            NSMutableDictionary *c = [NSMutableDictionary new];
+            c[@"address"] = @(addr);
+            if (valSize > 0) {
+                unsigned char buf[8] = {};
+                SYMemRead(addr, buf, valSize);
+                c[@"snapshot"] = [NSData dataWithBytes:buf length:valSize];
             }
-
-            for (size_t k = 0; k < count && totalHits < kMaxScanResults; k++) {
-                uintptr_t addr = hits[k];
-                [localResults addObject:@(addr)];
-                NSMutableDictionary *c = [NSMutableDictionary new];
-                c[@"address"] = @(addr);
-                if (valSize > 0) {
-                    unsigned char buf[8] = {};
-                    SYMemRead(addr, buf, valSize);
-                    c[@"snapshot"] = [NSData dataWithBytes:buf length:valSize];
-                }
-                [localCandidates addObject:c];
-                totalHits++;
-            }
-            SYScanFreeResults(hits);
+            [localCandidates addObject:c];
         }
+        SYScanFreeResults(hits);
 
         dispatch_async(dispatch_get_main_queue(), ^{
             __strong typeof(weakSelf) strongSelf = weakSelf;
@@ -144,10 +129,10 @@ static const size_t kMaxRegionSize = 100 * 1024 * 1024;
             [strongSelf.results setArray:localResults];
             [strongSelf.candidates setArray:localCandidates];
             strongSelf.searching = NO;
-            strongSelf.hasResults = (totalHits > 0);
+            strongSelf.hasResults = (count > 0);
             strongSelf.isNarrowing = strongSelf.hasResults;
-            NSString *msg = [NSString stringWithFormat:@"%zu results", totalHits];
-            [SYToast show:msg type:totalHits > 0 ? SYToastSuccess : SYToastWarning];
+            NSString *msg = [NSString stringWithFormat:@"%zu results", count];
+            [SYToast show:msg type:count > 0 ? SYToastSuccess : SYToastWarning];
             [strongSelf.viewController reloadTable];
         });
     });
