@@ -32,17 +32,19 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/theos/sdks
-          key: theos-sdks-${{ runner.os }}-iPhoneOS17.5
+          key: theos-sdks-${{ runner.os }}-iPhoneOS15.6
 
       - name: Download iOS SDK
         run: |
-          if [ ! -d "$THEOS/sdks/iPhoneOS17.5.sdk" ]; then
-            curl -LO https://github.com/theos/sdks/releases/download/2024-10-11/iPhoneOS17.5.sdk.tar.xz
-            tar -xJf iPhoneOS17.5.sdk.tar.xz -C "$THEOS/sdks"
+          if [ ! -d "$THEOS/sdks/iPhoneOS15.6.sdk" ]; then
+            curl -L -o sdk.tar.xz \
+              https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS15.6.sdk.tar.xz
+            tar -xJf sdk.tar.xz -C "$THEOS/sdks"
+            rm sdk.tar.xz
           fi
 
       - name: Install dependencies
-        run: sudo apt-get install -y libplist-utils
+        run: sudo apt-get install -y libplist-utils fakeroot
 
       - name: Build
         run: make clean && make
