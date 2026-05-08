@@ -6,52 +6,93 @@
 
 using namespace Shirayuki;
 
-uintptr_t *SYScanRegion(uintptr_t start, size_t len, const char *type, const char *input,
-                        size_t *outCount, size_t *outValSize) {
+static std::vector<uintptr_t> scanRegionCpp(uintptr_t start, size_t len, const std::string &t,
+                                            const std::string &v, size_t &outValSize) {
+    outValSize = 4;
+    if (t == "int32") {
+        int32_t val = v.empty() ? 0 : (int32_t)std::stoi(v);
+        return Scanner::findValue<int32_t>(start, len, val);
+    } else if (t == "int16") {
+        outValSize = 2;
+        int16_t val = v.empty() ? 0 : (int16_t)std::stoi(v);
+        return Scanner::findValue<int16_t>(start, len, val);
+    } else if (t == "int64") {
+        outValSize = 8;
+        int64_t val = v.empty() ? 0 : (int64_t)std::stoll(v);
+        return Scanner::findValue<int64_t>(start, len, val);
+    } else if (t == "float") {
+        float val = v.empty() ? 0.0f : std::stof(v);
+        return Scanner::findValue<float>(start, len, val);
+    } else if (t == "double") {
+        outValSize = 8;
+        double val = v.empty() ? 0.0 : std::stod(v);
+        return Scanner::findValue<double>(start, len, val);
+    } else if (t == "hex") {
+        outValSize = 0;
+        return Scanner::findPattern(start, len, v);
+    } else if (t == "regex") {
+        outValSize = 0;
+        return Scanner::findRegex(start, len, v);
+    } else {
+        outValSize = v.size();
+        return Scanner::findString(start, len, v);
+    }
+}
+
+static uintptr_t *vectorToHeap(const std::vector<uintptr_t> &v, size_t *outCount) {
+    if (v.empty()) {
+        *outCount = 0;
+        return nullptr;
+    }
+    uintptr_t *arr = (uintptr_t *)malloc(v.size() * sizeof(uintptr_t));
+    if (!arr) {
+        *outCount = 0;
+        return nullptr;
+    }
+    memcpy(arr, v.data(), v.size() * sizeof(uintptr_t));
+    *outCount = v.size();
+    return arr;
+}
+
+uintptr_t *SYScanAll(const char *type, const char *input, size_t maxResults, size_t maxRegionSize,
+                     size_t *outCount, size_t *outValSize) {
     *outCount = 0;
     *outValSize = 4;
 
-    std::string t(type ? type : "");
+    std::string t(type ? type : "int32");
     std::string v(input ? input : "");
 
-    std::vector<uintptr_t> hits;
+    std::vector<RegionInfo> regions = Memory::listRegionsFiltered(RegionFilter::ReadWrite);
+    std::vector<uintptr_t> allHits;
+    allHits.reserve(256);
 
-    if (t == "int32") {
-        hits = Scanner::findValue<int32_t>(start, len, (int32_t)std::stoi(v.empty() ? "0" : v));
-        *outValSize = 4;
-    } else if (t == "int16") {
-        hits = Scanner::findValue<int16_t>(start, len, (int16_t)std::stoi(v.empty() ? "0" : v));
-        *outValSize = 2;
-    } else if (t == "int64") {
-        hits = Scanner::findValue<int64_t>(start, len, (int64_t)std::stoll(v.empty() ? "0" : v));
-        *outValSize = 8;
-    } else if (t == "float") {
-        hits = Scanner::findValue<float>(start, len, std::stof(v.empty() ? "0" : v));
-        *outValSize = 4;
-    } else if (t == "double") {
-        hits = Scanner::findValue<double>(start, len, std::stod(v.empty() ? "0" : v));
-        *outValSize = 8;
-    } else if (t == "hex") {
-        hits = Scanner::findPattern(start, len, v);
-        *outValSize = 0;
-    } else if (t == "regex") {
-        hits = Scanner::findRegex(start, len, v);
-        *outValSize = 0;
-    } else {
-        // string
-        hits = Scanner::findString(start, len, v);
-        *outValSize = v.size();
+    for (size_t i = 0; i < regions.size(); i++) {
+        if (allHits.size() >= maxResults)
+            break;
+        if (regions[i].size > maxRegionSize)
+            continue;
+
+        size_t valSize = 4;
+        std::vector<uintptr_t> hits =
+            scanRegionCpp(regions[i].start, regions[i].size, t, v, valSize);
+        *outValSize = valSize;
+
+        for (size_t k = 0; k < hits.size() && allHits.size() < maxResults; k++) {
+            allHits.push_back(hits[k]);
+        }
     }
 
-    if (hits.empty())
-        return nullptr;
+    return vectorToHeap(allHits, outCount);
+}
 
-    uintptr_t *arr = (uintptr_t *)malloc(hits.size() * sizeof(uintptr_t));
-    if (!arr)
-        return nullptr;
-    memcpy(arr, hits.data(), hits.size() * sizeof(uintptr_t));
-    *outCount = hits.size();
-    return arr;
+uintptr_t *SYScanRegion(uintptr_t start, size_t len, const char *type, const char *input,
+                        size_t *outCount, size_t *outValSize) {
+    std::string t(type ? type : "int32");
+    std::string v(input ? input : "");
+    size_t valSize = 4;
+    std::vector<uintptr_t> hits = scanRegionCpp(start, len, t, v, valSize);
+    *outValSize = valSize;
+    return vectorToHeap(hits, outCount);
 }
 
 void SYScanFreeResults(uintptr_t *results) {
