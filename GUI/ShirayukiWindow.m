@@ -29,8 +29,10 @@
 }
 
 - (void)toggle {
-    if (self.hidden) [self show];
-    else [self hide];
+    if (self.hidden)
+        [self show];
+    else
+        [self hide];
 }
 
 @end

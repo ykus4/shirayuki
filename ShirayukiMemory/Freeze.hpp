@@ -2,10 +2,10 @@
 #define SHIRAYUKI_FREEZE_HPP
 
 #include "ShirayukiMemory.hpp"
-#include <mutex>
-#include <thread>
 #include <atomic>
 #include <functional>
+#include <mutex>
+#include <thread>
 
 namespace Shirayuki {
 
@@ -25,31 +25,34 @@ struct FreezeEntry {
 };
 
 class FreezeManager {
-public:
+  public:
     static FreezeManager &shared();
     ~FreezeManager();
 
     // Add a freeze entry (returns ID)
     uint64_t add(uintptr_t address, const void *value, size_t len,
-                 ValueType type = ValueType::Int32,
-                 const std::string &label = "");
+                 ValueType type = ValueType::Int32, const std::string &label = "");
 
     // Typed freeze
     template <typename T>
     uint64_t addValue(uintptr_t address, T value, const std::string &label = "") {
         ValueType vt = ValueType::Int32;
-        if constexpr (std::is_same_v<T, float>) vt = ValueType::Float32;
-        else if constexpr (std::is_same_v<T, double>) vt = ValueType::Float64;
-        else if constexpr (std::is_same_v<T, int64_t>) vt = ValueType::Int64;
-        else if constexpr (std::is_same_v<T, int16_t>) vt = ValueType::Int16;
-        else if constexpr (std::is_same_v<T, int8_t>) vt = ValueType::Int8;
+        if constexpr (std::is_same_v<T, float>)
+            vt = ValueType::Float32;
+        else if constexpr (std::is_same_v<T, double>)
+            vt = ValueType::Float64;
+        else if constexpr (std::is_same_v<T, int64_t>)
+            vt = ValueType::Int64;
+        else if constexpr (std::is_same_v<T, int16_t>)
+            vt = ValueType::Int16;
+        else if constexpr (std::is_same_v<T, int8_t>)
+            vt = ValueType::Int8;
         return add(address, &value, sizeof(T), vt, label);
     }
 
     // Conditional freeze: write only when condition is met
-    uint64_t addConditional(uintptr_t address, const void *value, size_t len,
-                            ValueType type, CompareMode condition,
-                            const void *threshold, size_t thresholdLen,
+    uint64_t addConditional(uintptr_t address, const void *value, size_t len, ValueType type,
+                            CompareMode condition, const void *threshold, size_t thresholdLen,
                             std::function<void(uint64_t, uintptr_t)> callback = nullptr);
 
     // Remove by ID
@@ -65,11 +68,17 @@ public:
     // Start/stop the freeze loop
     void start(uint32_t intervalMs = 16);
     void stop();
-    bool isRunning() const { return m_running.load(); }
+    bool isRunning() const {
+        return m_running.load();
+    }
 
     // Set interval
-    void setInterval(uint32_t ms) { m_intervalMs.store(ms); }
-    uint32_t interval() const { return m_intervalMs.load(); }
+    void setInterval(uint32_t ms) {
+        m_intervalMs.store(ms);
+    }
+    uint32_t interval() const {
+        return m_intervalMs.load();
+    }
 
     // Get all entries (thread-safe copy)
     std::vector<FreezeEntry> entries() const;
@@ -78,7 +87,7 @@ public:
     // Get single entry
     FreezeEntry *getEntry(uint64_t id);
 
-private:
+  private:
     FreezeManager() = default;
     void loop();
 

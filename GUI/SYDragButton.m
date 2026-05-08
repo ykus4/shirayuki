@@ -30,8 +30,8 @@
 }
 
 - (void)setupGesture {
-    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc]
-        initWithTarget:self action:@selector(handlePan:)];
+    UIPanGestureRecognizer *pan =
+        [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
     [self addGestureRecognizer:pan];
 
     [self addTarget:self action:@selector(handleTap) forControlEvents:UIControlEventTouchUpInside];
@@ -43,31 +43,34 @@
             _startCenter = self.center;
             _dragging = NO;
             // Scale up slightly
-            [UIView animateWithDuration:0.15 animations:^{
-                self.transform = CGAffineTransformMakeScale(1.1, 1.1);
-            }];
+            [UIView animateWithDuration:0.15
+                             animations:^{
+                                 self.transform = CGAffineTransformMakeScale(1.1, 1.1);
+                             }];
             break;
 
         case UIGestureRecognizerStateChanged: {
             CGPoint translation = [gesture translationInView:self.superview];
-            self.center = CGPointMake(_startCenter.x + translation.x,
-                                      _startCenter.y + translation.y);
+            self.center =
+                CGPointMake(_startCenter.x + translation.x, _startCenter.y + translation.y);
             _dragging = YES;
             break;
         }
 
         case UIGestureRecognizerStateEnded:
         case UIGestureRecognizerStateCancelled: {
-            [UIView animateWithDuration:0.15 animations:^{
-                self.transform = CGAffineTransformIdentity;
-            }];
+            [UIView animateWithDuration:0.15
+                             animations:^{
+                                 self.transform = CGAffineTransformIdentity;
+                             }];
 
             // Snap to edge
             [self snapToEdge];
             break;
         }
 
-        default: break;
+        default:
+            break;
     }
 }
 
@@ -87,10 +90,15 @@
     CGFloat halfH = self.bounds.size.height / 2.0;
     target.y = MAX(halfH + margin, MIN(target.y, bounds.size.height - halfH - margin));
 
-    [UIView animateWithDuration:0.3 delay:0 usingSpringWithDamping:0.7
-          initialSpringVelocity:0 options:0 animations:^{
-        self.center = target;
-    } completion:nil];
+    [UIView animateWithDuration:0.3
+                          delay:0
+         usingSpringWithDamping:0.7
+          initialSpringVelocity:0
+                        options:0
+                     animations:^{
+                         self.center = target;
+                     }
+                     completion:nil];
 }
 
 - (void)handleTap {
@@ -100,20 +108,24 @@
     }
 
     // Haptic
-    UIImpactFeedbackGenerator *haptic = [[UIImpactFeedbackGenerator alloc]
-        initWithStyle:UIImpactFeedbackStyleMedium];
+    UIImpactFeedbackGenerator *haptic =
+        [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
     [haptic impactOccurred];
 
     // Scale animation
-    [UIView animateWithDuration:0.1 animations:^{
-        self.transform = CGAffineTransformMakeScale(0.85, 0.85);
-    } completion:^(BOOL finished) {
-        [UIView animateWithDuration:0.1 animations:^{
-            self.transform = CGAffineTransformIdentity;
+    [UIView animateWithDuration:0.1
+        animations:^{
+            self.transform = CGAffineTransformMakeScale(0.85, 0.85);
+        }
+        completion:^(BOOL finished) {
+            [UIView animateWithDuration:0.1
+                             animations:^{
+                                 self.transform = CGAffineTransformIdentity;
+                             }];
         }];
-    }];
 
-    if (self.onTap) self.onTap();
+    if (self.onTap)
+        self.onTap();
 }
 
 @end

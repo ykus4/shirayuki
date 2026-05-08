@@ -38,3 +38,13 @@ include $(THEOS_MAKE_PATH)/tweak.mk
 
 after-install::
 	install.exec "killall -9 SpringBoard"
+
+FMT_FILES = $(shell find ShirayukiMemory GUI Tweak \
+	-name '*.cpp' -o -name '*.hpp' -o -name '*.mm' \
+	-o -name '*.m' -o -name '*.h')
+
+fmt:
+	clang-format -i $(FMT_FILES)
+
+fmt-check:
+	clang-format --dry-run --Werror $(FMT_FILES)
