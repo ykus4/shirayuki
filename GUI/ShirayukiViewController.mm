@@ -1,23 +1,24 @@
 #import "ShirayukiViewController.h"
-#import "ShirayukiWindow.h"
-#import "SYTheme.h"
-#import "SYResultCell.h"
-#import "SYToast.h"
-#import "SYTabHandler.h"
-#import "Handlers/SYSearchHandler.h"
-#import "Handlers/SYPatchHandler.h"
-#import "Handlers/SYFreezeHandler.h"
-#import "Handlers/SYPointerHandler.h"
-#import "Handlers/SYDumpHandler.h"
-#import "Handlers/SYWatchHandler.h"
-#import "ShirayukiMemory.hpp"
 #import "Freeze.hpp"
+#import "Handlers/SYDumpHandler.h"
+#import "Handlers/SYFreezeHandler.h"
+#import "Handlers/SYPatchHandler.h"
+#import "Handlers/SYPointerHandler.h"
+#import "Handlers/SYSearchHandler.h"
+#import "Handlers/SYWatchHandler.h"
+#import "SYResultCell.h"
+#import "SYTabHandler.h"
+#import "SYTheme.h"
+#import "SYToast.h"
+#import "ShirayukiMemory.hpp"
+#import "ShirayukiWindow.h"
 
 using namespace Shirayuki;
 
 static NSString *const kCellID = @"SYCell";
 
-@interface ShirayukiViewController () <UITableViewDelegate, UITableViewDataSource, UITextFieldDelegate>
+@interface ShirayukiViewController () <UITableViewDelegate, UITableViewDataSource,
+                                       UITextFieldDelegate>
 @property (nonatomic, strong) UIView *headerView;
 @property (nonatomic, strong) UIScrollView *tabBar;
 @property (nonatomic, strong) NSArray<UIButton *> *tabButtons;
@@ -56,14 +57,20 @@ static NSString *const kCellID = @"SYCell";
 }
 
 - (void)setupHandlers {
-    SYSearchHandler *search = [SYSearchHandler new]; search.viewController = self;
-    SYPatchHandler *patch = [SYPatchHandler new]; patch.viewController = self;
-    SYFreezeHandler *freeze = [SYFreezeHandler new]; freeze.viewController = self;
-    SYWatchHandler *watch = [SYWatchHandler new]; watch.viewController = self;
-    SYPointerHandler *ptr = [SYPointerHandler new]; ptr.viewController = self;
-    SYDumpHandler *dump = [SYDumpHandler new]; dump.viewController = self;
+    SYSearchHandler *search = [SYSearchHandler new];
+    search.viewController = self;
+    SYPatchHandler *patch = [SYPatchHandler new];
+    patch.viewController = self;
+    SYFreezeHandler *freeze = [SYFreezeHandler new];
+    freeze.viewController = self;
+    SYWatchHandler *watch = [SYWatchHandler new];
+    watch.viewController = self;
+    SYPointerHandler *ptr = [SYPointerHandler new];
+    ptr.viewController = self;
+    SYDumpHandler *dump = [SYDumpHandler new];
+    dump.viewController = self;
 
-    _handlers = @[search, patch, freeze, watch, ptr, dump];
+    _handlers = @[ search, patch, freeze, watch, ptr, dump ];
     _currentTabIndex = 0;
 }
 
@@ -79,7 +86,9 @@ static NSString *const kCellID = @"SYCell";
     _headerView.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:_headerView];
 
-    UIImageView *logo = [[UIImageView alloc] initWithImage:[SYTheme icon:@"snowflake" size:15 color:[SYTheme accent]]];
+    UIImageView *logo = [[UIImageView alloc] initWithImage:[SYTheme icon:@"snowflake"
+                                                                    size:15
+                                                                   color:[SYTheme accent]]];
     logo.translatesAutoresizingMaskIntoConstraints = NO;
     [_headerView addSubview:logo];
 
@@ -91,9 +100,12 @@ static NSString *const kCellID = @"SYCell";
     [_headerView addSubview:title];
 
     UIButton *closeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    [closeBtn setImage:[SYTheme icon:@"xmark" size:11 color:[SYTheme danger]] forState:UIControlStateNormal];
+    [closeBtn setImage:[SYTheme icon:@"xmark" size:11 color:[SYTheme danger]]
+              forState:UIControlStateNormal];
     closeBtn.translatesAutoresizingMaskIntoConstraints = NO;
-    [closeBtn addTarget:self action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
+    [closeBtn addTarget:self
+                  action:@selector(closeTapped)
+        forControlEvents:UIControlEventTouchUpInside];
     [_headerView addSubview:closeBtn];
 
     [NSLayoutConstraint activateConstraints:@[
@@ -126,13 +138,16 @@ static NSString *const kCellID = @"SYCell";
         UIButton *btn = [UIButton buttonWithType:UIButtonTypeSystem];
         UIImage *icon = [SYTheme icon:[h tabIcon] size:11 color:[SYTheme textMuted]];
         [btn setImage:icon forState:UIControlStateNormal];
-        [btn setTitle:[NSString stringWithFormat:@" %@", [h tabTitle]] forState:UIControlStateNormal];
+        [btn setTitle:[NSString stringWithFormat:@" %@", [h tabTitle]]
+             forState:UIControlStateNormal];
         [btn setTitleColor:[SYTheme textMuted] forState:UIControlStateNormal];
         btn.titleLabel.font = [SYTheme captionFont];
         btn.tag = i;
         [btn sizeToFit];
         btn.frame = CGRectMake(x, 3, btn.frame.size.width + 14, 24);
-        [btn addTarget:self action:@selector(tabTapped:) forControlEvents:UIControlEventTouchUpInside];
+        [btn addTarget:self
+                      action:@selector(tabTapped:)
+            forControlEvents:UIControlEventTouchUpInside];
         [_tabBar addSubview:btn];
         [buttons addObject:btn];
         x += btn.frame.size.width + 3;
@@ -165,7 +180,9 @@ static NSString *const kCellID = @"SYCell";
     _typeButton.backgroundColor = [SYTheme bgTertiary];
     _typeButton.layer.cornerRadius = [SYTheme radiusSmall];
     _typeButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [_typeButton addTarget:self action:@selector(typeTapped) forControlEvents:UIControlEventTouchUpInside];
+    [_typeButton addTarget:self
+                    action:@selector(typeTapped)
+          forControlEvents:UIControlEventTouchUpInside];
     [_inputContainer addSubview:_typeButton];
 
     _inputField = [[UITextField alloc] init];
@@ -186,13 +203,16 @@ static NSString *const kCellID = @"SYCell";
     _actionButton.backgroundColor = [SYTheme accent];
     _actionButton.layer.cornerRadius = [SYTheme radiusSmall];
     _actionButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [_actionButton addTarget:self action:@selector(actionTapped) forControlEvents:UIControlEventTouchUpInside];
+    [_actionButton addTarget:self
+                      action:@selector(actionTapped)
+            forControlEvents:UIControlEventTouchUpInside];
     [_inputContainer addSubview:_actionButton];
 
     [NSLayoutConstraint activateConstraints:@[
         [_inputContainer.topAnchor constraintEqualToAnchor:_tabBar.bottomAnchor constant:5],
         [_inputContainer.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:8],
-        [_inputContainer.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-8],
+        [_inputContainer.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor
+                                                       constant:-8],
         [_inputContainer.heightAnchor constraintEqualToConstant:32],
         [_typeButton.leadingAnchor constraintEqualToAnchor:_inputContainer.leadingAnchor],
         [_typeButton.centerYAnchor constraintEqualToAnchor:_inputContainer.centerYAnchor],
@@ -200,7 +220,8 @@ static NSString *const kCellID = @"SYCell";
         [_typeButton.heightAnchor constraintEqualToConstant:28],
         [_inputField.leadingAnchor constraintEqualToAnchor:_typeButton.trailingAnchor constant:5],
         [_inputField.centerYAnchor constraintEqualToAnchor:_inputContainer.centerYAnchor],
-        [_inputField.trailingAnchor constraintEqualToAnchor:_actionButton.leadingAnchor constant:-5],
+        [_inputField.trailingAnchor constraintEqualToAnchor:_actionButton.leadingAnchor
+                                                   constant:-5],
         [_inputField.heightAnchor constraintEqualToConstant:28],
         [_actionButton.trailingAnchor constraintEqualToAnchor:_inputContainer.trailingAnchor],
         [_actionButton.centerYAnchor constraintEqualToAnchor:_inputContainer.centerYAnchor],
@@ -215,8 +236,7 @@ static NSString *const kCellID = @"SYCell";
     _narrowBar.hidden = YES;
     [self.view addSubview:_narrowBar];
 
-    NSArray *modes = @[@"Changed", @"Unchanged", @"Inc", @"Dec", @"Reset"];
-    NSArray *icons = @[@"arrow.left.arrow.right", @"equal", @"arrow.up", @"arrow.down", @"trash"];
+    NSArray *modes = @[ @"Changed", @"Unchanged", @"Inc", @"Dec", @"Reset" ];
     CGFloat x = 0;
 
     for (NSUInteger i = 0; i < modes.count; i++) {
@@ -229,7 +249,9 @@ static NSString *const kCellID = @"SYCell";
         btn.tag = i;
         [btn sizeToFit];
         btn.frame = CGRectMake(x, 0, btn.frame.size.width + 12, 22);
-        [btn addTarget:self action:@selector(narrowTapped:) forControlEvents:UIControlEventTouchUpInside];
+        [btn addTarget:self
+                      action:@selector(narrowTapped:)
+            forControlEvents:UIControlEventTouchUpInside];
         [_narrowBar addSubview:btn];
         x += btn.frame.size.width + 4;
     }
@@ -262,11 +284,13 @@ static NSString *const kCellID = @"SYCell";
 }
 
 - (void)setupGestures {
-    UIPanGestureRecognizer *drag = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleDrag:)];
+    UIPanGestureRecognizer *drag =
+        [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleDrag:)];
     [_headerView addGestureRecognizer:drag];
 
-    UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc]
-        initWithTarget:self action:@selector(handleLongPress:)];
+    UILongPressGestureRecognizer *longPress =
+        [[UILongPressGestureRecognizer alloc] initWithTarget:self
+                                                      action:@selector(handleLongPress:)];
     longPress.minimumPressDuration = 0.5;
     [_tableView addGestureRecognizer:longPress];
 }
@@ -285,23 +309,32 @@ static NSString *const kCellID = @"SYCell";
     // Update tab indicator
     UIButton *btn = _tabButtons[_currentTabIndex];
     CGFloat dur = animated ? 0.25 : 0;
-    [UIView animateWithDuration:dur delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0 options:0 animations:^{
-        self.tabIndicator.frame = CGRectMake(btn.frame.origin.x, 27, btn.frame.size.width, 2);
-    } completion:nil];
+    [UIView animateWithDuration:dur
+                          delay:0
+         usingSpringWithDamping:0.8
+          initialSpringVelocity:0
+                        options:0
+                     animations:^{
+                         self.tabIndicator.frame =
+                             CGRectMake(btn.frame.origin.x, 27, btn.frame.size.width, 2);
+                     }
+                     completion:nil];
 
     // Update button colors
     for (NSUInteger i = 0; i < _tabButtons.count; i++) {
         UIColor *c = (i == (NSUInteger)_currentTabIndex) ? [SYTheme accent] : [SYTheme textMuted];
-        [_tabButtons[i] setImage:[SYTheme icon:[_handlers[i] tabIcon] size:11 color:c] forState:UIControlStateNormal];
+        [_tabButtons[i] setImage:[SYTheme icon:[_handlers[i] tabIcon] size:11 color:c]
+                        forState:UIControlStateNormal];
         [_tabButtons[i] setTitleColor:c forState:UIControlStateNormal];
     }
 
     // Update input
     _inputField.attributedPlaceholder = [[NSAttributedString alloc]
         initWithString:[h placeholder]
-        attributes:@{NSForegroundColorAttributeName: [SYTheme textMuted]}];
+            attributes:@{NSForegroundColorAttributeName : [SYTheme textMuted]}];
     [_typeButton setTitle:[h typeLabel] forState:UIControlStateNormal];
-    [_actionButton setImage:[SYTheme icon:[h actionIcon] size:13 color:[UIColor blackColor]] forState:UIControlStateNormal];
+    [_actionButton setImage:[SYTheme icon:[h actionIcon] size:13 color:[UIColor blackColor]]
+                   forState:UIControlStateNormal];
 
     // Show narrow bar only for search in narrowing mode
     BOOL showNarrow = (_currentTabIndex == 0 && [(SYSearchHandler *)_handlers[0] isNarrowing]);
@@ -318,14 +351,16 @@ static NSString *const kCellID = @"SYCell";
 #pragma mark - Actions
 
 - (void)closeTapped {
-    [UIView animateWithDuration:0.2 animations:^{
-        [ShirayukiWindow shared].transform = CGAffineTransformMakeScale(0.9, 0.9);
-        [ShirayukiWindow shared].alpha = 0;
-    } completion:^(BOOL finished) {
-        [[ShirayukiWindow shared] hide];
-        [ShirayukiWindow shared].transform = CGAffineTransformIdentity;
-        [ShirayukiWindow shared].alpha = 1;
-    }];
+    [UIView animateWithDuration:0.2
+        animations:^{
+            [ShirayukiWindow shared].transform = CGAffineTransformMakeScale(0.9, 0.9);
+            [ShirayukiWindow shared].alpha = 0;
+        }
+        completion:^(BOOL finished) {
+            [[ShirayukiWindow shared] hide];
+            [ShirayukiWindow shared].transform = CGAffineTransformIdentity;
+            [ShirayukiWindow shared].alpha = 1;
+        }];
 }
 
 - (void)typeTapped {
@@ -333,13 +368,16 @@ static NSString *const kCellID = @"SYCell";
         SYSearchHandler *sh = (SYSearchHandler *)_handlers[0];
         [sh cycleType];
         [_typeButton setTitle:[sh shortType] forState:UIControlStateNormal];
-        [UIView animateWithDuration:0.12 animations:^{
-            self.typeButton.transform = CGAffineTransformMakeScale(1.2, 1.2);
-        } completion:^(BOOL f) {
-            [UIView animateWithDuration:0.08 animations:^{
-                self.typeButton.transform = CGAffineTransformIdentity;
+        [UIView animateWithDuration:0.12
+            animations:^{
+                self.typeButton.transform = CGAffineTransformMakeScale(1.2, 1.2);
+            }
+            completion:^(BOOL f) {
+                [UIView animateWithDuration:0.08
+                                 animations:^{
+                                     self.typeButton.transform = CGAffineTransformIdentity;
+                                 }];
             }];
-        }];
     }
 }
 
@@ -347,8 +385,8 @@ static NSString *const kCellID = @"SYCell";
     NSString *input = _inputField.text;
     [_inputField resignFirstResponder];
 
-    UIImpactFeedbackGenerator *haptic = [[UIImpactFeedbackGenerator alloc]
-        initWithStyle:UIImpactFeedbackStyleLight];
+    UIImpactFeedbackGenerator *haptic =
+        [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
     [haptic impactOccurred];
 
     [[self currentHandler] performAction:input ?: @""];
@@ -357,11 +395,21 @@ static NSString *const kCellID = @"SYCell";
 - (void)narrowTapped:(UIButton *)sender {
     SYSearchHandler *sh = (SYSearchHandler *)_handlers[0];
     switch (sender.tag) {
-        case 0: [sh narrow:@"changed"]; break;
-        case 1: [sh narrow:@"unchanged"]; break;
-        case 2: [sh narrow:@"increased"]; break;
-        case 3: [sh narrow:@"decreased"]; break;
-        case 4: [sh resetSearch]; break;
+        case 0:
+            [sh narrow:@"changed"];
+            break;
+        case 1:
+            [sh narrow:@"unchanged"];
+            break;
+        case 2:
+            [sh narrow:@"increased"];
+            break;
+        case 3:
+            [sh narrow:@"decreased"];
+            break;
+        case 4:
+            [sh resetSearch];
+            break;
     }
     [self updateForCurrentTab:NO];
 }
@@ -371,17 +419,18 @@ static NSString *const kCellID = @"SYCell";
 - (void)handleDrag:(UIPanGestureRecognizer *)gesture {
     UIWindow *window = [ShirayukiWindow shared];
     CGPoint translation = [gesture translationInView:window.superview];
-    window.center = CGPointMake(window.center.x + translation.x,
-                                window.center.y + translation.y);
+    window.center = CGPointMake(window.center.x + translation.x, window.center.y + translation.y);
     [gesture setTranslation:CGPointZero inView:window.superview];
 }
 
 - (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
-    if (gesture.state != UIGestureRecognizerStateBegan) return;
+    if (gesture.state != UIGestureRecognizerStateBegan)
+        return;
 
     CGPoint point = [gesture locationInView:_tableView];
     NSIndexPath *indexPath = [_tableView indexPathForRowAtPoint:point];
-    if (!indexPath) return;
+    if (!indexPath)
+        return;
 
     id<SYTabHandler> h = [self currentHandler];
     if ([h respondsToSelector:@selector(didLongPressRow:)]) {
@@ -414,8 +463,8 @@ static NSString *const kCellID = @"SYCell";
 
     UIAlertController *alert = [UIAlertController
         alertControllerWithTitle:[NSString stringWithFormat:@"0x%lX", addr]
-        message:[NSString stringWithFormat:@"Current: %@", currentStr]
-        preferredStyle:UIAlertControllerStyleAlert];
+                         message:[NSString stringWithFormat:@"Current: %@", currentStr]
+                  preferredStyle:UIAlertControllerStyleAlert];
 
     [alert addTextFieldWithConfigurationHandler:^(UITextField *tf) {
         tf.text = currentStr;
@@ -423,40 +472,48 @@ static NSString *const kCellID = @"SYCell";
         tf.keyboardType = UIKeyboardTypeDecimalPad;
     }];
 
-    [alert addAction:[UIAlertAction actionWithTitle:@"Write" style:UIAlertActionStyleDefault
-        handler:^(UIAlertAction *a) {
-            NSString *val = alert.textFields.firstObject.text;
-            if ([type isEqualToString:@"float"]) {
-                float v = [val floatValue];
-                Memory::writeValue<float>(addr, v);
-            } else if ([type isEqualToString:@"double"]) {
-                double v = [val doubleValue];
-                Memory::writeValue<double>(addr, v);
-            } else if ([type isEqualToString:@"int64"]) {
-                int64_t v = [val longLongValue];
-                Memory::writeValue<int64_t>(addr, v);
-            } else {
-                int32_t v = [val intValue];
-                Memory::writeValue<int32_t>(addr, v);
-            }
-            [SYToast show:@"Written" type:SYToastSuccess];
-            [self reloadTable];
-        }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Write"
+                                              style:UIAlertActionStyleDefault
+                                            handler:^(UIAlertAction *a) {
+                                                NSString *val = alert.textFields.firstObject.text;
+                                                if ([type isEqualToString:@"float"]) {
+                                                    float v = [val floatValue];
+                                                    Memory::writeValue<float>(addr, v);
+                                                } else if ([type isEqualToString:@"double"]) {
+                                                    double v = [val doubleValue];
+                                                    Memory::writeValue<double>(addr, v);
+                                                } else if ([type isEqualToString:@"int64"]) {
+                                                    int64_t v = [val longLongValue];
+                                                    Memory::writeValue<int64_t>(addr, v);
+                                                } else {
+                                                    int32_t v = [val intValue];
+                                                    Memory::writeValue<int32_t>(addr, v);
+                                                }
+                                                [SYToast show:@"Written" type:SYToastSuccess];
+                                                [self reloadTable];
+                                            }]];
 
-    [alert addAction:[UIAlertAction actionWithTitle:@"Freeze" style:UIAlertActionStyleDefault
-        handler:^(UIAlertAction *a) {
-            NSString *val = alert.textFields.firstObject.text;
-            NSString *cmd = [NSString stringWithFormat:@"0x%lX %@", addr, val];
-            [(SYFreezeHandler *)self.handlers[2] performAction:cmd];
-        }]];
+    [alert addAction:[UIAlertAction
+                         actionWithTitle:@"Freeze"
+                                   style:UIAlertActionStyleDefault
+                                 handler:^(UIAlertAction *a) {
+                                     NSString *val = alert.textFields.firstObject.text;
+                                     NSString *cmd =
+                                         [NSString stringWithFormat:@"0x%lX %@", addr, val];
+                                     [(SYFreezeHandler *)self.handlers[2] performAction:cmd];
+                                 }]];
 
-    [alert addAction:[UIAlertAction actionWithTitle:@"Watch" style:UIAlertActionStyleDefault
-        handler:^(UIAlertAction *a) {
-            NSString *cmd = [NSString stringWithFormat:@"0x%lX", addr];
-            [(SYWatchHandler *)self.handlers[3] performAction:cmd];
-        }]];
+    [alert addAction:[UIAlertAction
+                         actionWithTitle:@"Watch"
+                                   style:UIAlertActionStyleDefault
+                                 handler:^(UIAlertAction *a) {
+                                     NSString *cmd = [NSString stringWithFormat:@"0x%lX", addr];
+                                     [(SYWatchHandler *)self.handlers[3] performAction:cmd];
+                                 }]];
 
-    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
+                                              style:UIAlertActionStyleCancel
+                                            handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
 }
 
@@ -466,7 +523,8 @@ static NSString *const kCellID = @"SYCell";
     return [[self currentHandler] numberOfRows];
 }
 
-- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+- (UITableViewCell *)tableView:(UITableView *)tableView
+         cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     return [[self currentHandler] cellForRow:indexPath.row inTableView:tableView];
 }
 
@@ -485,13 +543,16 @@ static NSString *const kCellID = @"SYCell";
     return NO;
 }
 
-- (void)tableView:(UITableView *)tableView commitEditingStyle:(UITableViewCellEditingStyle)style
-    forRowAtIndexPath:(NSIndexPath *)indexPath {
-    if (style != UITableViewCellEditingStyleDelete) return;
+- (void)tableView:(UITableView *)tableView
+    commitEditingStyle:(UITableViewCellEditingStyle)style
+     forRowAtIndexPath:(NSIndexPath *)indexPath {
+    if (style != UITableViewCellEditingStyleDelete)
+        return;
     id<SYTabHandler> h = [self currentHandler];
     if ([h respondsToSelector:@selector(deleteRow:)]) {
         [h deleteRow:indexPath.row];
-        [tableView deleteRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationFade];
+        [tableView deleteRowsAtIndexPaths:@[ indexPath ]
+                         withRowAnimation:UITableViewRowAnimationFade];
     }
 }
 

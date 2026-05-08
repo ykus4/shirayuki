@@ -4,14 +4,14 @@
 @interface SYTheme : NSObject
 
 // Background
-+ (UIColor *)bgPrimary;    // main panel bg
-+ (UIColor *)bgSecondary;  // card/cell bg
-+ (UIColor *)bgTertiary;   // input fields
++ (UIColor *)bgPrimary;   // main panel bg
++ (UIColor *)bgSecondary; // card/cell bg
++ (UIColor *)bgTertiary;  // input fields
 
 // Accent
-+ (UIColor *)accent;       // cyan
-+ (UIColor *)accentDim;    // muted cyan
-+ (UIColor *)accentGlow;   // bright glow for active states
++ (UIColor *)accent;     // cyan
++ (UIColor *)accentDim;  // muted cyan
++ (UIColor *)accentGlow; // bright glow for active states
 
 // Semantic
 + (UIColor *)success;

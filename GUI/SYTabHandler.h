@@ -3,10 +3,10 @@
 @protocol SYTabHandler <NSObject>
 @required
 - (NSString *)tabTitle;
-- (NSString *)tabIcon;       // SF Symbol name
+- (NSString *)tabIcon; // SF Symbol name
 - (NSString *)placeholder;
 - (NSString *)typeLabel;
-- (NSString *)actionIcon;    // SF Symbol for action button
+- (NSString *)actionIcon; // SF Symbol for action button
 
 - (void)performAction:(NSString *)input;
 - (NSInteger)numberOfRows;

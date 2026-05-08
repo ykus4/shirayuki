@@ -1,9 +1,9 @@
 #import "SYFreezeHandler.h"
-#import "ShirayukiViewController.h"
-#import "SYTheme.h"
-#import "SYResultCell.h"
-#import "SYToast.h"
 #import "Freeze.hpp"
+#import "SYResultCell.h"
+#import "SYTheme.h"
+#import "SYToast.h"
+#import "ShirayukiViewController.h"
 
 using namespace Shirayuki;
 
@@ -17,15 +17,27 @@ static NSString *const kCellID = @"SYCell";
 
 - (instancetype)init {
     self = [super init];
-    if (self) { _entries = [NSMutableArray new]; }
+    if (self) {
+        _entries = [NSMutableArray new];
+    }
     return self;
 }
 
-- (NSString *)tabTitle { return @"Freeze"; }
-- (NSString *)tabIcon { return @"lock.fill"; }
-- (NSString *)placeholder { return @"0xADDR VALUE [type:i32|f32]"; }
-- (NSString *)typeLabel { return @"frz"; }
-- (NSString *)actionIcon { return @"lock.fill"; }
+- (NSString *)tabTitle {
+    return @"Freeze";
+}
+- (NSString *)tabIcon {
+    return @"lock.fill";
+}
+- (NSString *)placeholder {
+    return @"0xADDR VALUE [type:i32|f32]";
+}
+- (NSString *)typeLabel {
+    return @"frz";
+}
+- (NSString *)actionIcon {
+    return @"lock.fill";
+}
 
 - (void)performAction:(NSString *)input {
     NSArray *parts = [input componentsSeparatedByString:@" "];
@@ -55,18 +67,20 @@ static NSString *const kCellID = @"SYCell";
         fid = fm.add(addr, &v, sizeof(int32_t), ValueType::Int32, "");
     }
 
-    if (!fm.isRunning()) fm.start(16);
+    if (!fm.isRunning())
+        fm.start(16);
 
     NSMutableDictionary *entry = [@{
-        @"id": @(fid),
-        @"address": @(addr),
-        @"value": valStr,
-        @"type": typeStr,
-        @"active": @YES
+        @"id" : @(fid),
+        @"address" : @(addr),
+        @"value" : valStr,
+        @"type" : typeStr,
+        @"active" : @YES
     } mutableCopy];
     [_entries addObject:entry];
 
-    [SYToast show:[NSString stringWithFormat:@"Frozen 0x%llX = %@", addr, valStr] type:SYToastSuccess];
+    [SYToast show:[NSString stringWithFormat:@"Frozen 0x%llX = %@", addr, valStr]
+             type:SYToastSuccess];
     [self.viewController reloadTable];
 }
 
@@ -77,21 +91,27 @@ static NSString *const kCellID = @"SYCell";
     [self.viewController reloadTable];
 }
 
-- (NSInteger)numberOfRows { return _entries.count; }
+- (NSInteger)numberOfRows {
+    return _entries.count;
+}
 
 - (UITableViewCell *)cellForRow:(NSInteger)row inTableView:(UITableView *)tableView {
-    SYResultCell *cell = [tableView dequeueReusableCellWithIdentifier:kCellID forIndexPath:
-        [NSIndexPath indexPathForRow:row inSection:0]];
+    SYResultCell *cell =
+        [tableView dequeueReusableCellWithIdentifier:kCellID
+                                        forIndexPath:[NSIndexPath indexPathForRow:row inSection:0]];
 
     NSDictionary *entry = _entries[row];
     BOOL active = [entry[@"active"] boolValue];
 
-    [cell configureWithIcon:[SYTheme icon:active ? @"lock.fill" : @"lock.open" size:14
-                                    color:active ? [SYTheme accent] : [SYTheme textMuted]]
-                      title:[NSString stringWithFormat:@"0x%llX", [entry[@"address"] unsignedLongLongValue]]
-                     detail:[NSString stringWithFormat:@"= %@ (%@)", entry[@"value"], entry[@"type"]]
-                      badge:active ? @"FROZEN" : @"PAUSED"
-                 badgeColor:active ? [SYTheme accent] : [SYTheme textMuted]];
+    [cell
+        configureWithIcon:[SYTheme icon:active ? @"lock.fill" : @"lock.open"
+                                   size:14
+                                  color:active ? [SYTheme accent] : [SYTheme textMuted]]
+                    title:[NSString
+                              stringWithFormat:@"0x%llX", [entry[@"address"] unsignedLongLongValue]]
+                   detail:[NSString stringWithFormat:@"= %@ (%@)", entry[@"value"], entry[@"type"]]
+                    badge:active ? @"FROZEN" : @"PAUSED"
+               badgeColor:active ? [SYTheme accent] : [SYTheme textMuted]];
     return cell;
 }
 
@@ -103,14 +123,16 @@ static NSString *const kCellID = @"SYCell";
     uint64_t fid = [entry[@"id"] unsignedLongLongValue];
     FreezeManager::shared().setActive(fid, active);
 
-    UIImpactFeedbackGenerator *haptic = [[UIImpactFeedbackGenerator alloc]
-        initWithStyle:UIImpactFeedbackStyleLight];
+    UIImpactFeedbackGenerator *haptic =
+        [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
     [haptic impactOccurred];
 
     [self.viewController reloadTable];
 }
 
-- (BOOL)canDeleteRow:(NSInteger)row { return YES; }
+- (BOOL)canDeleteRow:(NSInteger)row {
+    return YES;
+}
 - (void)deleteRow:(NSInteger)row {
     uint64_t fid = [_entries[row][@"id"] unsignedLongLongValue];
     FreezeManager::shared().remove(fid);
@@ -119,7 +141,8 @@ static NSString *const kCellID = @"SYCell";
 
 - (void)didLongPressRow:(NSInteger)row {
     uintptr_t addr = [_entries[row][@"address"] unsignedLongLongValue];
-    [UIPasteboard generalPasteboard].string = [NSString stringWithFormat:@"0x%lX", (unsigned long)addr];
+    [UIPasteboard generalPasteboard].string =
+        [NSString stringWithFormat:@"0x%lX", (unsigned long)addr];
     [SYToast show:@"Address copied" type:SYToastInfo];
 }
 

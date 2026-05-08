@@ -13,7 +13,7 @@ Shirayuki_FILES = Tweak/Tweak.xm \
 	ShirayukiMemory/Watchpoint.cpp \
 	ShirayukiMemory/Session.mm \
 	GUI/ShirayukiWindow.m \
-	GUI/ShirayukiViewController.m \
+	GUI/ShirayukiViewController.mm \
 	GUI/SYTheme.m \
 	GUI/SYResultCell.m \
 	GUI/SYDragButton.m \
@@ -25,7 +25,7 @@ Shirayuki_FILES = Tweak/Tweak.xm \
 	GUI/Handlers/SYPointerHandler.mm \
 	GUI/Handlers/SYDumpHandler.mm
 
-Shirayuki_CFLAGS = -fobjc-arc -std=c++17 \
+Shirayuki_CFLAGS = -fobjc-arc \
 	-I$(THEOS_PROJECT_DIR)/ShirayukiMemory \
 	-I$(THEOS_PROJECT_DIR)/GUI \
 	-I$(THEOS_PROJECT_DIR)/GUI/Handlers
@@ -38,3 +38,13 @@ include $(THEOS_MAKE_PATH)/tweak.mk
 
 after-install::
 	install.exec "killall -9 SpringBoard"
+
+FMT_FILES = $(shell find ShirayukiMemory GUI Tweak \
+	-name '*.cpp' -o -name '*.hpp' -o -name '*.mm' \
+	-o -name '*.m' -o -name '*.h')
+
+fmt:
+	clang-format -i $(FMT_FILES)
+
+fmt-check:
+	clang-format --dry-run --Werror $(FMT_FILES)

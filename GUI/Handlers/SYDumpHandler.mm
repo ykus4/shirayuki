@@ -1,9 +1,9 @@
 #import "SYDumpHandler.h"
-#import "ShirayukiViewController.h"
-#import "SYTheme.h"
 #import "SYResultCell.h"
+#import "SYTheme.h"
 #import "SYToast.h"
 #import "ShirayukiMemory.hpp"
+#import "ShirayukiViewController.h"
 
 using namespace Shirayuki;
 
@@ -18,15 +18,27 @@ static NSString *const kCellID = @"SYCell";
 
 - (instancetype)init {
     self = [super init];
-    if (self) { _disasmLines = [NSMutableArray new]; }
+    if (self) {
+        _disasmLines = [NSMutableArray new];
+    }
     return self;
 }
 
-- (NSString *)tabTitle { return @"Dump"; }
-- (NSString *)tabIcon { return @"doc.text"; }
-- (NSString *)placeholder { return @"0xADDR [len|asm] (asm = disassemble)"; }
-- (NSString *)typeLabel { return @"raw"; }
-- (NSString *)actionIcon { return @"eye.fill"; }
+- (NSString *)tabTitle {
+    return @"Dump";
+}
+- (NSString *)tabIcon {
+    return @"doc.text";
+}
+- (NSString *)placeholder {
+    return @"0xADDR [len|asm] (asm = disassemble)";
+}
+- (NSString *)typeLabel {
+    return @"raw";
+}
+- (NSString *)actionIcon {
+    return @"eye.fill";
+}
 
 - (void)performAction:(NSString *)input {
     NSArray *parts = [input componentsSeparatedByString:@" "];
@@ -50,7 +62,8 @@ static NSString *const kCellID = @"SYCell";
             len = [parts[1] integerValue];
         }
     }
-    if (len > 4096) len = 4096;
+    if (len > 4096)
+        len = 4096;
 
     if (isDisasm) {
         [self showDisassembly:addr count:len];
@@ -64,22 +77,27 @@ static NSString *const kCellID = @"SYCell";
 
     UIAlertController *alert = [UIAlertController
         alertControllerWithTitle:[NSString stringWithFormat:@"0x%lX (%zu bytes)", addr, len]
-        message:nil
-        preferredStyle:UIAlertControllerStyleAlert];
+                         message:nil
+                  preferredStyle:UIAlertControllerStyleAlert];
 
     NSMutableAttributedString *attrMsg = [[NSMutableAttributedString alloc]
         initWithString:[NSString stringWithUTF8String:dump.c_str()]
-        attributes:@{
-            NSFontAttributeName: [SYTheme monoSmall],
-            NSForegroundColorAttributeName: [SYTheme textPrimary]
-        }];
+            attributes:@{
+                NSFontAttributeName : [SYTheme monoSmall],
+                NSForegroundColorAttributeName : [SYTheme textPrimary]
+            }];
     [alert setValue:attrMsg forKey:@"attributedMessage"];
 
-    [alert addAction:[UIAlertAction actionWithTitle:@"Copy" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
-        [UIPasteboard generalPasteboard].string = [NSString stringWithUTF8String:dump.c_str()];
-        [SYToast show:@"Copied" type:SYToastSuccess];
-    }]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Copy"
+                                              style:UIAlertActionStyleDefault
+                                            handler:^(UIAlertAction *a) {
+                                                [UIPasteboard generalPasteboard].string =
+                                                    [NSString stringWithUTF8String:dump.c_str()];
+                                                [SYToast show:@"Copied" type:SYToastSuccess];
+                                            }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+                                              style:UIAlertActionStyleCancel
+                                            handler:nil]];
 
     [self.viewController presentViewController:alert animated:YES completion:nil];
 }
@@ -89,11 +107,12 @@ static NSString *const kCellID = @"SYCell";
 
     auto insns = Disasm::disassemble(addr, count);
     for (auto &insn : insns) {
-        NSString *formatted = [NSString stringWithUTF8String:Disasm::formatInstruction(insn).c_str()];
+        NSString *formatted =
+            [NSString stringWithUTF8String:Disasm::formatInstruction(insn).c_str()];
         [_disasmLines addObject:@{
-            @"text": formatted,
-            @"address": @(insn.address),
-            @"mnemonic": @(insn.mnemonic.c_str())
+            @"text" : formatted,
+            @"address" : @(insn.address),
+            @"mnemonic" : @(insn.mnemonic.c_str())
         }];
     }
 
@@ -101,11 +120,14 @@ static NSString *const kCellID = @"SYCell";
     [self.viewController reloadTable];
 }
 
-- (NSInteger)numberOfRows { return _disasmLines.count; }
+- (NSInteger)numberOfRows {
+    return _disasmLines.count;
+}
 
 - (UITableViewCell *)cellForRow:(NSInteger)row inTableView:(UITableView *)tableView {
-    SYResultCell *cell = [tableView dequeueReusableCellWithIdentifier:kCellID forIndexPath:
-        [NSIndexPath indexPathForRow:row inSection:0]];
+    SYResultCell *cell =
+        [tableView dequeueReusableCellWithIdentifier:kCellID
+                                        forIndexPath:[NSIndexPath indexPathForRow:row inSection:0]];
 
     NSDictionary *line = _disasmLines[row];
     NSString *mnemonic = line[@"mnemonic"];
@@ -148,6 +170,8 @@ static NSString *const kCellID = @"SYCell";
     }
 }
 
-- (CGFloat)rowHeight { return 36; }
+- (CGFloat)rowHeight {
+    return 36;
+}
 
 @end
