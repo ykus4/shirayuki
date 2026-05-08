@@ -97,7 +97,6 @@ static const size_t kMaxRegionSize = 100 * 1024 * 1024;
     }
 
     NSString *searchType = _searchType;
-    __weak typeof(self) weakSelf = self;
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         // SYScanAll is a plain C function — no C++ syntax in this block
@@ -123,23 +122,19 @@ static const size_t kMaxRegionSize = 100 * 1024 * 1024;
         SYScanFreeResults(hits);
 
         dispatch_async(dispatch_get_main_queue(), ^{
-            __strong typeof(weakSelf) strongSelf = weakSelf;
-            if (!strongSelf)
-                return;
-            [strongSelf.results setArray:localResults];
-            [strongSelf.candidates setArray:localCandidates];
-            strongSelf.searching = NO;
-            strongSelf.hasResults = (count > 0);
-            strongSelf.isNarrowing = strongSelf.hasResults;
+            [self.results setArray:localResults];
+            [self.candidates setArray:localCandidates];
+            self.searching = NO;
+            self.hasResults = (count > 0);
+            self.isNarrowing = self.hasResults;
             NSString *msg = [NSString stringWithFormat:@"%zu results", count];
             [SYToast show:msg type:count > 0 ? SYToastSuccess : SYToastWarning];
-            [strongSelf.viewController reloadTable];
+            [self.viewController reloadTable];
         });
     });
 }
 
 - (void)narrow:(NSString *)mode {
-    __weak typeof(self) weakSelf = self;
     NSArray *snapshot = [_candidates copy];
     size_t valSize = [self currentValueSize];
 
@@ -175,16 +170,13 @@ static const size_t kMaxRegionSize = 100 * 1024 * 1024;
         }
 
         dispatch_async(dispatch_get_main_queue(), ^{
-            __strong typeof(weakSelf) strongSelf = weakSelf;
-            if (!strongSelf)
-                return;
-            [strongSelf.candidates setArray:kept];
-            [strongSelf.results removeAllObjects];
+            [self.candidates setArray:kept];
+            [self.results removeAllObjects];
             for (NSDictionary *c in kept)
-                [strongSelf.results addObject:c[@"address"]];
+                [self.results addObject:c[@"address"]];
             [SYToast show:[NSString stringWithFormat:@"Narrowed to %lu", (unsigned long)kept.count]
                      type:SYToastInfo];
-            [strongSelf.viewController reloadTable];
+            [self.viewController reloadTable];
         });
     });
 }
@@ -195,7 +187,6 @@ static const size_t kMaxRegionSize = 100 * 1024 * 1024;
     SYValueTypeUtil::parseValue(input, _searchType, targetBuf);
     NSData *targetData = [NSData dataWithBytes:targetBuf length:valSize];
 
-    __weak typeof(self) weakSelf = self;
     NSArray *snapshot = [_candidates copy];
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
@@ -214,16 +205,13 @@ static const size_t kMaxRegionSize = 100 * 1024 * 1024;
         }
 
         dispatch_async(dispatch_get_main_queue(), ^{
-            __strong typeof(weakSelf) strongSelf = weakSelf;
-            if (!strongSelf)
-                return;
-            [strongSelf.candidates setArray:kept];
-            [strongSelf.results removeAllObjects];
+            [self.candidates setArray:kept];
+            [self.results removeAllObjects];
             for (NSDictionary *c in kept)
-                [strongSelf.results addObject:c[@"address"]];
+                [self.results addObject:c[@"address"]];
             [SYToast show:[NSString stringWithFormat:@"Exact: %lu", (unsigned long)kept.count]
                      type:SYToastInfo];
-            [strongSelf.viewController reloadTable];
+            [self.viewController reloadTable];
         });
     });
 }
