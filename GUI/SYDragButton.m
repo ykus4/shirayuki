@@ -39,7 +39,7 @@
 
 - (void)handlePan:(UIPanGestureRecognizer *)gesture {
     switch (gesture.state) {
-        case UIGestureRecognizerStateBegan:
+        case UIGestureRecognizerStateBegan: {
             _startCenter = self.center;
             _dragging = NO;
             // Scale up slightly
@@ -48,6 +48,7 @@
                                  self.transform = CGAffineTransformMakeScale(1.1, 1.1);
                              }];
             break;
+        }
 
         case UIGestureRecognizerStateChanged: {
             CGPoint translation = [gesture translationInView:self.superview];
