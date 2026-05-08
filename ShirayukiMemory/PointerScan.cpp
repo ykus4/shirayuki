@@ -2,30 +2,44 @@
 #include <algorithm>
 #include <cstring>
 #include <set>
+#include <sstream>
+#include <iomanip>
 
 namespace Shirayuki {
 
-// Resolve a pointer chain at runtime
 uintptr_t PointerChain::resolve() const {
     ImageInfo img = Image::find(moduleName);
     if (!img.isValid()) return 0;
 
     uintptr_t current = img.base + moduleOffset;
 
-    for (size_t i = 0; i < offsets.size(); i++) {
-        // Read pointer at current address
+    for (auto off : offsets) {
         uintptr_t ptr = 0;
         if (Memory::read(current, &ptr, sizeof(ptr)) != Status::Success) return 0;
         if (ptr == 0) return 0;
-
-        // Apply offset
-        current = ptr + offsets[i];
+        current = ptr + off;
     }
 
     return current;
 }
 
-// Find all pointers in readable memory that point within [target - maxOffset, target + maxOffset]
+std::string PointerChain::toString() const {
+    std::ostringstream ss;
+    // Extract short module name
+    size_t lastSlash = moduleName.rfind('/');
+    std::string shortName = (lastSlash != std::string::npos)
+        ? moduleName.substr(lastSlash + 1) : moduleName;
+
+    ss << shortName << "+0x" << std::hex << moduleOffset;
+    for (auto off : offsets) {
+        ss << " -> [";
+        if (off >= 0) ss << "+0x" << std::hex << off;
+        else ss << "-0x" << std::hex << (-off);
+        ss << "]";
+    }
+    return ss.str();
+}
+
 std::vector<uintptr_t> PointerScanner::findPointersTo(uintptr_t targetAddress,
                                                       int64_t maxOffset) {
     std::vector<uintptr_t> results;
@@ -35,11 +49,9 @@ std::vector<uintptr_t> PointerScanner::findPointersTo(uintptr_t targetAddress,
     uintptr_t rangeEnd = targetAddress + maxOffset;
 
     for (auto &region : regions) {
-        if (!region.isReadable()) continue;
         if (region.size < sizeof(uintptr_t)) continue;
 
-        // Read region in chunks to avoid huge allocations
-        const size_t chunkSize = 1024 * 1024; // 1MB
+        const size_t chunkSize = 1024 * 1024; // 1MB chunks
         for (size_t off = 0; off < region.size; off += chunkSize) {
             size_t readLen = std::min(chunkSize, region.size - off);
             std::vector<uint8_t> buf(readLen);
@@ -48,7 +60,6 @@ std::vector<uintptr_t> PointerScanner::findPointersTo(uintptr_t targetAddress,
                 continue;
             }
 
-            // Scan for pointers
             for (size_t i = 0; i + sizeof(uintptr_t) <= readLen; i += sizeof(uintptr_t)) {
                 uintptr_t val;
                 memcpy(&val, buf.data() + i, sizeof(uintptr_t));
@@ -59,23 +70,28 @@ std::vector<uintptr_t> PointerScanner::findPointersTo(uintptr_t targetAddress,
             }
         }
 
-        if (results.size() >= 10000) break; // safety limit for single-level
+        if (results.size() >= 10000) break;
     }
 
     return results;
 }
 
-// Recursive pointer chain builder
+// Recursive scan with image list cached outside
 struct ScanContext {
     const PointerScanConfig &config;
     std::vector<PointerChain> &results;
-    std::set<uintptr_t> visited; // avoid cycles
+    std::set<uintptr_t> visited;
+    const std::vector<ImageInfo> &images; // cached
 };
 
 static void scanRecursive(ScanContext &ctx, uintptr_t target,
-                          std::vector<int64_t> &currentOffsets, int depth) {
-    if (depth >= (int)ctx.config.maxDepth) return;
+                          std::deque<int64_t> &currentOffsets, uint32_t depth) {
+    if (depth >= ctx.config.maxDepth) return;
     if (ctx.results.size() >= ctx.config.maxResults) return;
+
+    if (ctx.config.progressCallback) {
+        ctx.config.progressCallback(depth, ctx.config.maxDepth);
+    }
 
     auto pointers = PointerScanner::findPointersTo(target, ctx.config.maxOffset);
 
@@ -84,16 +100,14 @@ static void scanRecursive(ScanContext &ctx, uintptr_t target,
         if (ctx.visited.count(ptrAddr)) continue;
         ctx.visited.insert(ptrAddr);
 
-        // Calculate offset: pointer value + offset = target
         uintptr_t ptrValue = 0;
         Memory::read(ptrAddr, &ptrValue, sizeof(ptrValue));
         int64_t offset = (int64_t)target - (int64_t)ptrValue;
 
-        currentOffsets.insert(currentOffsets.begin(), offset);
+        currentOffsets.push_front(offset);
 
-        // Check if this pointer is in a known module (static base found)
-        auto images = Image::listAll();
-        for (auto &img : images) {
+        // Check if this pointer is in a known module
+        for (auto &img : ctx.images) {
             if (ptrAddr >= img.base && ptrAddr < img.base + 0x10000000) {
                 PointerChain chain;
                 chain.moduleName = img.name;
@@ -105,11 +119,11 @@ static void scanRecursive(ScanContext &ctx, uintptr_t target,
         }
 
         // Go deeper
-        if (depth + 1 < (int)ctx.config.maxDepth) {
+        if (depth + 1 < ctx.config.maxDepth) {
             scanRecursive(ctx, ptrAddr, currentOffsets, depth + 1);
         }
 
-        currentOffsets.erase(currentOffsets.begin());
+        currentOffsets.pop_front();
         ctx.visited.erase(ptrAddr);
     }
 }
@@ -118,15 +132,16 @@ std::vector<PointerChain> PointerScanner::scan(const PointerScanConfig &config) 
     std::vector<PointerChain> results;
     if (!config.targetAddress) return results;
 
-    ScanContext ctx{config, results, {}};
-    std::vector<int64_t> offsets;
-
-    // First check if target itself is directly in a module
+    // Cache image list once
     auto images = Image::listAll();
+
+    ScanContext ctx{config, results, {}, images};
+    std::deque<int64_t> offsets;
+
+    // Check if target itself is directly in a module
     for (auto &img : images) {
         if (config.targetAddress >= img.base &&
             config.targetAddress < img.base + 0x10000000) {
-            // Direct static address — no chain needed
             PointerChain direct;
             direct.moduleName = img.name;
             direct.moduleOffset = config.targetAddress - img.base;
@@ -136,16 +151,11 @@ std::vector<PointerChain> PointerScanner::scan(const PointerScanConfig &config) 
 
     scanRecursive(ctx, config.targetAddress, offsets, 0);
 
-    if (config.progressCallback) {
-        config.progressCallback(1, 1); // signal completion
-    }
-
     return results;
 }
 
 bool PointerScanner::validate(const PointerChain &chain, uintptr_t expectedTarget) {
-    uintptr_t resolved = chain.resolve();
-    return resolved == expectedTarget;
+    return chain.resolve() == expectedTarget;
 }
 
 } // namespace Shirayuki
