@@ -1,5 +1,6 @@
 #import "SYSearchHandler.h"
 #import "SYResultCell.h"
+#import "SYScanHelper.hpp"
 #import "SYTheme.h"
 #import "SYToast.h"
 #import "SYValueTypeUtil.h"
@@ -11,36 +12,6 @@ using namespace Shirayuki;
 static NSString *const kCellID = @"SYCell";
 static const size_t kMaxScanResults = 2000;
 static const size_t kMaxRegionSize = 100 * 1024 * 1024;
-
-// C++ helper: scan a single region and return matching addresses.
-// Keeps all template instantiations out of nested ObjC blocks.
-static std::vector<uintptr_t> scanRegion(uintptr_t start, size_t len, NSString *type,
-                                         NSString *input, size_t &outValSize) {
-    outValSize = 4;
-    if ([type isEqualToString:@"int32"]) {
-        return Scanner::findValue<int32_t>(start, len, (int32_t)[input intValue]);
-    } else if ([type isEqualToString:@"int16"]) {
-        outValSize = 2;
-        return Scanner::findValue<int16_t>(start, len, (int16_t)[input intValue]);
-    } else if ([type isEqualToString:@"int64"]) {
-        outValSize = 8;
-        return Scanner::findValue<int64_t>(start, len, (int64_t)[input longLongValue]);
-    } else if ([type isEqualToString:@"float"]) {
-        return Scanner::findValue<float>(start, len, [input floatValue]);
-    } else if ([type isEqualToString:@"double"]) {
-        outValSize = 8;
-        return Scanner::findValue<double>(start, len, [input doubleValue]);
-    } else if ([type isEqualToString:@"hex"]) {
-        outValSize = 0;
-        return Scanner::findPattern(start, len, [input UTF8String]);
-    } else if ([type isEqualToString:@"regex"]) {
-        outValSize = 0;
-        return Scanner::findRegex(start, len, [input UTF8String]);
-    } else {
-        outValSize = [input lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
-        return Scanner::findString(start, len, [input UTF8String]);
-    }
-}
 
 @interface SYSearchHandler ()
 @property (nonatomic, strong) NSMutableArray<NSNumber *> *results;
@@ -129,16 +100,21 @@ static std::vector<uintptr_t> scanRegion(uintptr_t start, size_t len, NSString *
     __weak typeof(self) weakSelf = self;
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        // Build filtered region list in C++ land, convert to plain ObjC arrays
         auto regions = Memory::listRegionsFiltered(RegionFilter::ReadWrite);
+
+        // Collect region start/size as plain ObjC numbers before any parallel work
         NSMutableArray *regionStarts = [NSMutableArray arrayWithCapacity:regions.size()];
         NSMutableArray *regionSizes = [NSMutableArray arrayWithCapacity:regions.size()];
-        for (auto &r : regions) {
-            if (r.size <= kMaxRegionSize) {
-                [regionStarts addObject:@(r.start)];
-                [regionSizes addObject:@(r.size)];
+        for (size_t i = 0; i < regions.size(); i++) {
+            if (regions[i].size <= kMaxRegionSize) {
+                [regionStarts addObject:@(regions[i].start)];
+                [regionSizes addObject:@(regions[i].size)];
             }
         }
+
+        // Use the C linkage helper (SYScanHelper.cpp) so no C++ templates appear in blocks
+        const char *typeC = [searchType UTF8String];
+        const char *inputC = [input UTF8String];
 
         NSLock *lock = [NSLock new];
         NSMutableArray *mergedResults = [NSMutableArray new];
@@ -159,30 +135,32 @@ static std::vector<uintptr_t> scanRegion(uintptr_t start, size_t len, NSString *
                 if (skip)
                     return;
 
-                // All template calls go through the static helper — no templates in this block
-                size_t valSize = 4;
-                std::vector<uintptr_t> hits = scanRegion(rStart, rSize, searchType, input, valSize);
-                if (hits.empty())
+                size_t count = 0, valSize = 4;
+                uintptr_t *hits = SYScanRegion(rStart, rSize, typeC, inputC, &count, &valSize);
+                if (!hits || count == 0) {
+                    SYScanFreeResults(hits);
                     return;
+                }
 
-                NSMutableArray *localR = [NSMutableArray arrayWithCapacity:hits.size()];
-                NSMutableArray *localC = [NSMutableArray arrayWithCapacity:hits.size()];
-                for (size_t k = 0; k < hits.size(); k++) {
+                NSMutableArray *localR = [NSMutableArray arrayWithCapacity:count];
+                NSMutableArray *localC = [NSMutableArray arrayWithCapacity:count];
+                for (size_t k = 0; k < count; k++) {
                     uintptr_t addr = hits[k];
                     [localR addObject:@(addr)];
                     NSMutableDictionary *c = [NSMutableDictionary new];
                     c[@"address"] = @(addr);
                     if (valSize > 0) {
-                        uint8_t buf[8] = {};
-                        Memory::read(addr, buf, valSize);
+                        unsigned char buf[8] = {};
+                        SYMemRead(addr, buf, valSize);
                         c[@"snapshot"] = [NSData dataWithBytes:buf length:valSize];
                     }
                     [localC addObject:c];
                 }
+                SYScanFreeResults(hits);
 
                 [lock lock];
-                totalHits += hits.size();
-                NSUInteger canAdd = kMaxScanResults > mergedResults.count
+                totalHits += count;
+                NSUInteger canAdd = (mergedResults.count < kMaxScanResults)
                                         ? kMaxScanResults - mergedResults.count
                                         : 0;
                 if (canAdd > 0) {
