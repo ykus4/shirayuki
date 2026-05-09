@@ -1,7 +1,7 @@
 # ❄️ Shirayuki
 
 <p align="center">
-  <img src="assets/icon.png" width="180" alt="shirayuki icon" />
+  <img src="assets/icon.png" width="360" alt="shirayuki icon" />
 </p>
 
 <p align="center">
