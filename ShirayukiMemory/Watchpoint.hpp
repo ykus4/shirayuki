@@ -60,7 +60,9 @@ class WatchManager {
     size_t count() const;
 
     // Read current value as string for display
-    static std::string formatValue(const WatchEntry &entry);
+    static std::string formatValue(const WatchEntry &entry) {
+        return ValueFormat::format(entry.currentValue.data(), entry.type);
+    }
 
   private:
     WatchManager() = default;

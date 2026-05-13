@@ -6,6 +6,7 @@
 #include <libkern/OSCacheControl.h>
 #include <mach/vm_map.h>
 #include <sstream>
+#include <unordered_map>
 
 namespace Shirayuki {
 
@@ -431,11 +432,24 @@ std::vector<uintptr_t> Scanner::findRegex(uintptr_t start, size_t len, const std
     if (pattern.empty() || !len)
         return results;
 
+    // Cache compiled regexes to avoid recompilation on every scan
+    static std::mutex s_cacheMutex;
+    static std::unordered_map<std::string, std::regex> s_regexCache;
+
     std::regex re;
-    try {
-        re = std::regex(pattern, std::regex::ECMAScript | std::regex::optimize);
-    } catch (...) {
-        return results; // invalid pattern
+    {
+        std::lock_guard<std::mutex> cacheLock(s_cacheMutex);
+        auto it = s_regexCache.find(pattern);
+        if (it != s_regexCache.end()) {
+            re = it->second;
+        } else {
+            try {
+                re = std::regex(pattern, std::regex::ECMAScript | std::regex::optimize);
+                s_regexCache[pattern] = re;
+            } catch (...) {
+                return results; // invalid pattern
+            }
+        }
     }
 
     const char *buf = reinterpret_cast<const char *>(start);
@@ -906,5 +920,166 @@ std::string formatInstruction(const Instruction &insn) {
 }
 
 } // namespace Disasm
+
+// =============================================================================
+// ValueFormat
+// =============================================================================
+
+namespace ValueFormat {
+
+std::string format(const uint8_t *buf, ValueType type) {
+    std::ostringstream ss;
+    switch (type) {
+        case ValueType::Int8: {
+            int8_t v;
+            memcpy(&v, buf, 1);
+            ss << (int)v;
+            break;
+        }
+        case ValueType::UInt8: {
+            uint8_t v;
+            memcpy(&v, buf, 1);
+            ss << (unsigned)v;
+            break;
+        }
+        case ValueType::Int16: {
+            int16_t v;
+            memcpy(&v, buf, 2);
+            ss << v;
+            break;
+        }
+        case ValueType::UInt16: {
+            uint16_t v;
+            memcpy(&v, buf, 2);
+            ss << v;
+            break;
+        }
+        case ValueType::Int32: {
+            int32_t v;
+            memcpy(&v, buf, 4);
+            ss << v << " (0x" << std::hex << (uint32_t)v << ")";
+            break;
+        }
+        case ValueType::UInt32: {
+            uint32_t v;
+            memcpy(&v, buf, 4);
+            ss << v;
+            break;
+        }
+        case ValueType::Int64: {
+            int64_t v;
+            memcpy(&v, buf, 8);
+            ss << v;
+            break;
+        }
+        case ValueType::UInt64: {
+            uint64_t v;
+            memcpy(&v, buf, 8);
+            ss << v;
+            break;
+        }
+        case ValueType::Float32: {
+            float v;
+            memcpy(&v, buf, 4);
+            ss << std::fixed << std::setprecision(3) << v;
+            break;
+        }
+        case ValueType::Float64: {
+            double v;
+            memcpy(&v, buf, 8);
+            ss << std::fixed << std::setprecision(5) << v;
+            break;
+        }
+    }
+    return ss.str();
+}
+
+size_t parse(const std::string &input, ValueType type, uint8_t buf[8]) {
+    memset(buf, 0, 8);
+    size_t sz = valueTypeSize(type);
+    switch (type) {
+        case ValueType::Int8: {
+            int8_t v = (int8_t)std::stoi(input);
+            memcpy(buf, &v, 1);
+            break;
+        }
+        case ValueType::UInt8: {
+            uint8_t v = (uint8_t)std::stoul(input);
+            memcpy(buf, &v, 1);
+            break;
+        }
+        case ValueType::Int16: {
+            int16_t v = (int16_t)std::stoi(input);
+            memcpy(buf, &v, 2);
+            break;
+        }
+        case ValueType::UInt16: {
+            uint16_t v = (uint16_t)std::stoul(input);
+            memcpy(buf, &v, 2);
+            break;
+        }
+        case ValueType::Int32: {
+            int32_t v = std::stoi(input);
+            memcpy(buf, &v, 4);
+            break;
+        }
+        case ValueType::UInt32: {
+            uint32_t v = (uint32_t)std::stoul(input);
+            memcpy(buf, &v, 4);
+            break;
+        }
+        case ValueType::Int64: {
+            int64_t v = std::stoll(input);
+            memcpy(buf, &v, 8);
+            break;
+        }
+        case ValueType::UInt64: {
+            uint64_t v = std::stoull(input);
+            memcpy(buf, &v, 8);
+            break;
+        }
+        case ValueType::Float32: {
+            float v = std::stof(input);
+            memcpy(buf, &v, 4);
+            break;
+        }
+        case ValueType::Float64: {
+            double v = std::stod(input);
+            memcpy(buf, &v, 8);
+            break;
+        }
+    }
+    return sz;
+}
+
+ValueType fromTag(const std::string &tag) {
+    if (tag == "int8")
+        return ValueType::Int8;
+    if (tag == "uint8")
+        return ValueType::UInt8;
+    if (tag == "int16")
+        return ValueType::Int16;
+    if (tag == "uint16")
+        return ValueType::UInt16;
+    if (tag == "int32")
+        return ValueType::Int32;
+    if (tag == "uint32")
+        return ValueType::UInt32;
+    if (tag == "int64")
+        return ValueType::Int64;
+    if (tag == "uint64")
+        return ValueType::UInt64;
+    if (tag == "float" || tag == "float32")
+        return ValueType::Float32;
+    if (tag == "double" || tag == "float64")
+        return ValueType::Float64;
+    return ValueType::Int32; // default
+}
+
+std::string toTag(ValueType type) {
+    return valueTypeLabel(type);
+}
+
+} // namespace ValueFormat
 
 } // namespace Shirayuki
