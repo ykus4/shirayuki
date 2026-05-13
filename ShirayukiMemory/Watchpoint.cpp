@@ -1,7 +1,5 @@
 #include "Watchpoint.hpp"
 #include <cstring>
-#include <iomanip>
-#include <sstream>
 
 namespace Shirayuki {
 
@@ -83,8 +81,13 @@ void WatchManager::stop() {
 
 void WatchManager::loop() {
     while (!m_stopRequested.load()) {
+        // Collect changed entries and callback outside the lock to avoid deadlock
+        WatchCallback cbCopy;
+        std::vector<WatchEntry> triggered;
+
         {
             std::lock_guard<std::mutex> lock(m_mutex);
+            cbCopy = m_callback;
             for (auto &entry : m_entries) {
                 if (!entry.active)
                     continue;
@@ -102,15 +105,20 @@ void WatchManager::loop() {
                     entry.hasChanged = true;
                     entry.changeCount++;
                     entry.lastChangeTime = std::chrono::steady_clock::now();
-
-                    if (m_callback) {
-                        m_callback(entry);
+                    if (cbCopy) {
+                        triggered.push_back(entry);
                     }
                 } else {
                     entry.hasChanged = false;
                 }
             }
         }
+
+        // Invoke callbacks after releasing lock
+        for (auto &e : triggered) {
+            cbCopy(e);
+        }
+
         std::this_thread::sleep_for(std::chrono::milliseconds(m_intervalMs.load()));
     }
 }
@@ -123,76 +131,6 @@ std::vector<WatchEntry> WatchManager::entries() const {
 size_t WatchManager::count() const {
     std::lock_guard<std::mutex> lock(m_mutex);
     return m_entries.size();
-}
-
-std::string WatchManager::formatValue(const WatchEntry &entry) {
-    std::ostringstream ss;
-    const uint8_t *data = entry.currentValue.data();
-
-    switch (entry.type) {
-        case ValueType::Int8: {
-            int8_t v;
-            memcpy(&v, data, 1);
-            ss << (int)v;
-            break;
-        }
-        case ValueType::UInt8: {
-            uint8_t v;
-            memcpy(&v, data, 1);
-            ss << (unsigned)v;
-            break;
-        }
-        case ValueType::Int16: {
-            int16_t v;
-            memcpy(&v, data, 2);
-            ss << v;
-            break;
-        }
-        case ValueType::UInt16: {
-            uint16_t v;
-            memcpy(&v, data, 2);
-            ss << v;
-            break;
-        }
-        case ValueType::Int32: {
-            int32_t v;
-            memcpy(&v, data, 4);
-            ss << v;
-            break;
-        }
-        case ValueType::UInt32: {
-            uint32_t v;
-            memcpy(&v, data, 4);
-            ss << v;
-            break;
-        }
-        case ValueType::Int64: {
-            int64_t v;
-            memcpy(&v, data, 8);
-            ss << v;
-            break;
-        }
-        case ValueType::UInt64: {
-            uint64_t v;
-            memcpy(&v, data, 8);
-            ss << v;
-            break;
-        }
-        case ValueType::Float32: {
-            float v;
-            memcpy(&v, data, 4);
-            ss << std::fixed << std::setprecision(3) << v;
-            break;
-        }
-        case ValueType::Float64: {
-            double v;
-            memcpy(&v, data, 8);
-            ss << std::fixed << std::setprecision(5) << v;
-            break;
-        }
-    }
-
-    return ss.str();
 }
 
 } // namespace Shirayuki
