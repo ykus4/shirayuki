@@ -24,5 +24,23 @@ void SYScanFreeResults(uintptr_t *results);
 int SYMemRead(uintptr_t addr, unsigned char *buf, size_t valSize);
 
 #ifdef __cplusplus
-}
-#endif
+} // extern "C"
+
+// RAII wrapper for scan results — ensures SYScanFreeResults is always called.
+// Usage (outside dispatch_async blocks only):
+//   ScanResults r;
+//   r.data = SYScanAll(..., &r.count, &r.valSize);
+struct ScanResults {
+    uintptr_t *data = nullptr;
+    size_t count = 0;
+    size_t valSize = 4;
+
+    ScanResults() = default;
+    ~ScanResults() {
+        SYScanFreeResults(data);
+    }
+    ScanResults(const ScanResults &) = delete;
+    ScanResults &operator=(const ScanResults &) = delete;
+};
+
+#endif // __cplusplus

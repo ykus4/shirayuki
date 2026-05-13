@@ -4,14 +4,13 @@
 #import "SYTheme.h"
 #import "SYToast.h"
 #import "SYValueTypeUtil.h"
+#import "ShirayukiConfig.hpp"
 #import "ShirayukiMemory.hpp"
 #import "ShirayukiViewController.h"
 
 using namespace Shirayuki;
 
 static NSString *const kCellID = @"SYCell";
-static const size_t kMaxScanResults = 2000;
-static const size_t kMaxRegionSize = 100 * 1024 * 1024;
 
 @interface SYSearchHandler ()
 @property (nonatomic, strong) NSMutableArray<NSNumber *> *results;
