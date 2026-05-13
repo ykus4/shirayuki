@@ -219,6 +219,24 @@ std::vector<Instruction> disassemble(uintptr_t address, size_t count);
 std::string formatInstruction(const Instruction &insn);
 } // namespace Disasm
 
+// --- Value formatting and parsing ---
+namespace ValueFormat {
+// Format raw bytes as a human-readable string for the given type
+std::string format(const uint8_t *buf, ValueType type);
+
+// Parse a decimal/float string into raw bytes for the given type.
+// Returns number of bytes written (0 on failure).
+size_t parse(const std::string &input, ValueType type, uint8_t buf[8]);
+
+// Convert a string type tag ("int32", "float", "double", "int64", "int16",
+// "uint32", "int8", "uint8", "uint16", "uint64") to ValueType.
+// Unknown tags default to Int32.
+ValueType fromTag(const std::string &tag);
+
+// Convert ValueType to its canonical string tag.
+std::string toTag(ValueType type);
+} // namespace ValueFormat
+
 } // namespace Shirayuki
 
 #endif // SHIRAYUKI_MEMORY_HPP

@@ -1,4 +1,5 @@
 #include "PointerScan.hpp"
+#include "ShirayukiConfig.hpp"
 #include <algorithm>
 #include <cstring>
 #include <iomanip>
@@ -6,10 +7,6 @@
 #include <sstream>
 
 namespace Shirayuki {
-
-static constexpr size_t kPointerScanChunkSize = 1024 * 1024; // 1MB per read chunk
-static constexpr size_t kPointerScanMaxRawResults = 10000;   // cap per findPointersTo
-static constexpr uintptr_t kModuleMaxSize = 0x10000000;      // 256MB per module heuristic
 
 uintptr_t PointerChain::resolve() const {
     ImageInfo img = Image::find(moduleName);
@@ -121,7 +118,7 @@ static void scanRecursive(ScanContext &ctx, uintptr_t target, std::deque<int64_t
 
         // Check if this pointer is in a known module
         for (auto &img : ctx.images) {
-            if (ptrAddr >= img.base && ptrAddr < img.base + kModuleMaxSize) {
+            if (ptrAddr >= img.base && ptrAddr < img.base + kPointerScanModuleMaxSize) {
                 PointerChain chain;
                 chain.moduleName = img.name;
                 chain.moduleOffset = ptrAddr - img.base;
@@ -154,7 +151,8 @@ std::vector<PointerChain> PointerScanner::scan(const PointerScanConfig &config) 
 
     // Check if target itself is directly in a module
     for (auto &img : images) {
-        if (config.targetAddress >= img.base && config.targetAddress < img.base + kModuleMaxSize) {
+        if (config.targetAddress >= img.base &&
+            config.targetAddress < img.base + kPointerScanModuleMaxSize) {
             PointerChain direct;
             direct.moduleName = img.name;
             direct.moduleOffset = config.targetAddress - img.base;

@@ -176,7 +176,17 @@ void FreezeManager::loop() {
                     if (Memory::read(entry.address, current.data(), sz) == Status::Success) {
                         // Perform signed integer addition on raw bytes (little-endian)
                         int64_t step = entry.incrementStep;
-                        if (sz == 4) {
+                        if (sz == 1) {
+                            int8_t v;
+                            memcpy(&v, current.data(), 1);
+                            v += (int8_t)step;
+                            memcpy(entry.value.data(), &v, 1);
+                        } else if (sz == 2) {
+                            int16_t v;
+                            memcpy(&v, current.data(), 2);
+                            v += (int16_t)step;
+                            memcpy(entry.value.data(), &v, 2);
+                        } else if (sz == 4) {
                             int32_t v;
                             memcpy(&v, current.data(), 4);
                             v += (int32_t)step;
@@ -186,11 +196,6 @@ void FreezeManager::loop() {
                             memcpy(&v, current.data(), 8);
                             v += step;
                             memcpy(entry.value.data(), &v, 8);
-                        } else if (sz == 2) {
-                            int16_t v;
-                            memcpy(&v, current.data(), 2);
-                            v += (int16_t)step;
-                            memcpy(entry.value.data(), &v, 2);
                         }
                         Memory::write(entry.address, entry.value.data(), sz);
                     }
