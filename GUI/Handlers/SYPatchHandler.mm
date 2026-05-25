@@ -11,9 +11,10 @@ static NSString *const kCellID = @"SYCell";
 
 @interface SYPatchHandler ()
 @property (nonatomic, strong) NSMutableArray<NSMutableDictionary *> *patches;
-// Each undo item: @{@"action": @"apply"/@"restore", @"index": @(row)}
+// Each undo item targets a stable patch id so row deletion/reordering cannot affect it.
 @property (nonatomic, strong) NSMutableArray<NSDictionary *> *undoStack;
 @property (nonatomic, strong) NSMutableArray<NSDictionary *> *redoStack;
+@property (nonatomic, assign) NSUInteger nextPatchId;
 @end
 
 @implementation SYPatchHandler
@@ -24,8 +25,17 @@ static NSString *const kCellID = @"SYCell";
         _patches = [NSMutableArray new];
         _undoStack = [NSMutableArray new];
         _redoStack = [NSMutableArray new];
+        _nextPatchId = 1;
     }
     return self;
+}
+
+- (NSInteger)indexForPatchId:(NSNumber *)patchId {
+    for (NSUInteger i = 0; i < _patches.count; i++) {
+        if ([_patches[i][@"id"] isEqualToNumber:patchId])
+            return (NSInteger)i;
+    }
+    return -1;
 }
 
 - (NSArray<NSDictionary *> *)allPatches {
@@ -56,6 +66,11 @@ static NSString *const kCellID = @"SYCell";
     }
 
     unsigned long long addr = strtoull([parts[0] UTF8String], NULL, 16);
+    if (!addr) {
+        [SYToast show:@"Invalid address" type:SYToastError];
+        return;
+    }
+
     NSMutableString *hexStr = [NSMutableString new];
     NSString *label = @"";
 
@@ -83,6 +98,7 @@ static NSString *const kCellID = @"SYCell";
     auto patch = Patch::createWithHex((uintptr_t)addr, [hexStr UTF8String]);
     if (patch.isValid() && patch.apply()) {
         NSMutableDictionary *entry = [@{
+            @"id" : @(_nextPatchId++),
             @"address" : @(addr),
             @"hex" : hexStr,
             @"original" : @(patch.originalHex().c_str()),
@@ -91,7 +107,11 @@ static NSString *const kCellID = @"SYCell";
         } mutableCopy];
         [_patches addObject:entry];
         // Record undo: "remove the last entry"
-        [_undoStack addObject:@{@"action" : @"remove", @"index" : @(_patches.count - 1)}];
+        [_undoStack addObject:@{
+            @"action" : @"remove",
+            @"id" : entry[@"id"],
+            @"index" : @(_patches.count - 1)
+        }];
         [_redoStack removeAllObjects];
         [SYToast show:[NSString stringWithFormat:@"Patched 0x%llX", addr] type:SYToastSuccess];
     } else {
@@ -151,14 +171,14 @@ static NSString *const kCellID = @"SYCell";
         auto bytes = Hex::toBytes([entry[@"original"] UTF8String]);
         Memory::write(addr, bytes.data(), bytes.size());
         entry[@"applied"] = @NO;
-        [_undoStack addObject:@{@"action" : @"reapply", @"index" : @(row)}];
+        [_undoStack addObject:@{@"action" : @"reapply", @"id" : entry[@"id"], @"index" : @(row)}];
         [_redoStack removeAllObjects];
         [SYToast show:@"Restored" type:SYToastInfo];
     } else {
         auto bytes = Hex::toBytes([entry[@"hex"] UTF8String]);
         Memory::write(addr, bytes.data(), bytes.size());
         entry[@"applied"] = @YES;
-        [_undoStack addObject:@{@"action" : @"restore", @"index" : @(row)}];
+        [_undoStack addObject:@{@"action" : @"restore", @"id" : entry[@"id"], @"index" : @(row)}];
         [_redoStack removeAllObjects];
         [SYToast show:@"Re-applied" type:SYToastSuccess];
     }
@@ -200,9 +220,10 @@ static NSString *const kCellID = @"SYCell";
     [_undoStack removeLastObject];
 
     NSString *action = item[@"action"];
-    NSInteger idx = [item[@"index"] integerValue];
+    NSNumber *patchId = item[@"id"];
+    NSInteger idx = [self indexForPatchId:patchId];
 
-    if ([action isEqualToString:@"remove"] && idx < (NSInteger)_patches.count) {
+    if ([action isEqualToString:@"remove"] && idx >= 0) {
         // Undo an apply: restore original bytes and remove entry
         NSMutableDictionary *entry = _patches[idx];
         uintptr_t addr = [entry[@"address"] unsignedLongLongValue];
@@ -210,22 +231,22 @@ static NSString *const kCellID = @"SYCell";
         Memory::write(addr, bytes.data(), bytes.size());
         [_redoStack addObject:@{@"action" : @"readd", @"entry" : entry, @"index" : @(idx)}];
         [_patches removeObjectAtIndex:idx];
-    } else if ([action isEqualToString:@"restore"] && idx < (NSInteger)_patches.count) {
+    } else if ([action isEqualToString:@"restore"] && idx >= 0) {
         // Undo a re-apply: restore original
         NSMutableDictionary *entry = _patches[idx];
         uintptr_t addr = [entry[@"address"] unsignedLongLongValue];
         auto bytes = Hex::toBytes([entry[@"original"] UTF8String]);
         Memory::write(addr, bytes.data(), bytes.size());
         entry[@"applied"] = @NO;
-        [_redoStack addObject:@{@"action" : @"reapply", @"index" : @(idx)}];
-    } else if ([action isEqualToString:@"reapply"] && idx < (NSInteger)_patches.count) {
+        [_redoStack addObject:@{@"action" : @"reapply", @"id" : patchId, @"index" : @(idx)}];
+    } else if ([action isEqualToString:@"reapply"] && idx >= 0) {
         // Undo a restore: re-apply patch
         NSMutableDictionary *entry = _patches[idx];
         uintptr_t addr = [entry[@"address"] unsignedLongLongValue];
         auto bytes = Hex::toBytes([entry[@"hex"] UTF8String]);
         Memory::write(addr, bytes.data(), bytes.size());
         entry[@"applied"] = @YES;
-        [_redoStack addObject:@{@"action" : @"restore", @"index" : @(idx)}];
+        [_redoStack addObject:@{@"action" : @"restore", @"id" : patchId, @"index" : @(idx)}];
     }
 
     [SYToast show:@"Undone" type:SYToastInfo];
@@ -239,7 +260,6 @@ static NSString *const kCellID = @"SYCell";
     [_redoStack removeLastObject];
 
     NSString *action = item[@"action"];
-    NSInteger idx = [item[@"index"] integerValue];
 
     if ([action isEqualToString:@"readd"]) {
         // Redo an apply: re-apply and re-insert
@@ -248,22 +268,29 @@ static NSString *const kCellID = @"SYCell";
         auto bytes = Hex::toBytes([entry[@"hex"] UTF8String]);
         Memory::write(addr, bytes.data(), bytes.size());
         entry[@"applied"] = @YES;
-        [_patches insertObject:entry atIndex:(NSUInteger)idx];
-        [_undoStack addObject:@{@"action" : @"remove", @"index" : @(idx)}];
-    } else if ([action isEqualToString:@"reapply"] && idx < (NSInteger)_patches.count) {
+        NSUInteger idx = MIN([item[@"index"] unsignedIntegerValue], _patches.count);
+        [_patches insertObject:entry atIndex:idx];
+        [_undoStack addObject:@{@"action" : @"remove", @"id" : entry[@"id"], @"index" : @(idx)}];
+    } else if ([action isEqualToString:@"reapply"]) {
+        NSInteger idx = [self indexForPatchId:item[@"id"]];
+        if (idx < 0)
+            return;
         NSMutableDictionary *entry = _patches[idx];
         uintptr_t addr = [entry[@"address"] unsignedLongLongValue];
         auto bytes = Hex::toBytes([entry[@"hex"] UTF8String]);
         Memory::write(addr, bytes.data(), bytes.size());
         entry[@"applied"] = @YES;
-        [_undoStack addObject:@{@"action" : @"restore", @"index" : @(idx)}];
-    } else if ([action isEqualToString:@"restore"] && idx < (NSInteger)_patches.count) {
+        [_undoStack addObject:@{@"action" : @"restore", @"id" : item[@"id"], @"index" : @(idx)}];
+    } else if ([action isEqualToString:@"restore"]) {
+        NSInteger idx = [self indexForPatchId:item[@"id"]];
+        if (idx < 0)
+            return;
         NSMutableDictionary *entry = _patches[idx];
         uintptr_t addr = [entry[@"address"] unsignedLongLongValue];
         auto bytes = Hex::toBytes([entry[@"original"] UTF8String]);
         Memory::write(addr, bytes.data(), bytes.size());
         entry[@"applied"] = @NO;
-        [_undoStack addObject:@{@"action" : @"reapply", @"index" : @(idx)}];
+        [_undoStack addObject:@{@"action" : @"reapply", @"id" : item[@"id"], @"index" : @(idx)}];
     }
 
     [SYToast show:@"Redone" type:SYToastSuccess];
