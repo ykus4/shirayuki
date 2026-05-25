@@ -10,22 +10,42 @@ static std::vector<uintptr_t> scanRegionCpp(uintptr_t start, size_t len, const s
                                             const std::string &v, size_t &outValSize) {
     outValSize = 4;
     if (t == "int32") {
-        int32_t val = v.empty() ? 0 : (int32_t)std::stoi(v);
+        uint8_t buf[8] = {};
+        if (!ValueFormat::parse(v, ValueType::Int32, buf))
+            return {};
+        int32_t val;
+        memcpy(&val, buf, sizeof(val));
         return Scanner::findValue<int32_t>(start, len, val);
     } else if (t == "int16") {
         outValSize = 2;
-        int16_t val = v.empty() ? 0 : (int16_t)std::stoi(v);
+        uint8_t buf[8] = {};
+        if (!ValueFormat::parse(v, ValueType::Int16, buf))
+            return {};
+        int16_t val;
+        memcpy(&val, buf, sizeof(val));
         return Scanner::findValue<int16_t>(start, len, val);
     } else if (t == "int64") {
         outValSize = 8;
-        int64_t val = v.empty() ? 0 : (int64_t)std::stoll(v);
+        uint8_t buf[8] = {};
+        if (!ValueFormat::parse(v, ValueType::Int64, buf))
+            return {};
+        int64_t val;
+        memcpy(&val, buf, sizeof(val));
         return Scanner::findValue<int64_t>(start, len, val);
     } else if (t == "float") {
-        float val = v.empty() ? 0.0f : std::stof(v);
+        uint8_t buf[8] = {};
+        if (!ValueFormat::parse(v, ValueType::Float32, buf))
+            return {};
+        float val;
+        memcpy(&val, buf, sizeof(val));
         return Scanner::findValue<float>(start, len, val);
     } else if (t == "double") {
         outValSize = 8;
-        double val = v.empty() ? 0.0 : std::stod(v);
+        uint8_t buf[8] = {};
+        if (!ValueFormat::parse(v, ValueType::Float64, buf))
+            return {};
+        double val;
+        memcpy(&val, buf, sizeof(val));
         return Scanner::findValue<double>(start, len, val);
     } else if (t == "hex") {
         outValSize = 0;
