@@ -48,6 +48,10 @@ static NSString *const kCellID = @"SYCell";
     }
 
     unsigned long long addr = strtoull([parts[0] UTF8String], NULL, 16);
+    if (!addr) {
+        [SYToast show:@"Invalid address" type:SYToastError];
+        return;
+    }
     NSString *valStr = parts[1];
     NSString *typeStr = parts.count > 2 ? parts[2] : @"i32";
 
@@ -63,6 +67,10 @@ static NSString *const kCellID = @"SYCell";
     ValueType vtype = SYValueTypeUtil::fromString(canonicalType);
     uint8_t buf[8] = {};
     size_t valSize = SYValueTypeUtil::parseValue(valStr, canonicalType, buf);
+    if (!valSize) {
+        [SYToast show:@"Invalid value" type:SYToastWarning];
+        return;
+    }
 
     auto &fm = FreezeManager::shared();
     uint64_t fid = fm.add(addr, buf, valSize, vtype, "");
