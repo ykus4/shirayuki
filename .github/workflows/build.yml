@@ -71,7 +71,7 @@ jobs:
 
       - name: Upload .deb
         if: steps.build.outcome == 'success'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.ver.outputs.artifact }}
           path: packages/*.deb
