@@ -2,9 +2,11 @@
 #import "Freeze.hpp"
 #import "Handlers/SYDumpHandler.h"
 #import "Handlers/SYFreezeHandler.h"
+#import "Handlers/SYModuleHandler.h"
 #import "Handlers/SYPatchHandler.h"
 #import "Handlers/SYPointerHandler.h"
 #import "Handlers/SYSearchHandler.h"
+#import "Handlers/SYThreadHandler.h"
 #import "Handlers/SYWatchHandler.h"
 #import "SYResultCell.h"
 #import "SYTabHandler.h"
@@ -125,8 +127,12 @@ static NSString *const kHistoryCellID = @"SYHistoryCell";
     ptr.viewController = self;
     SYDumpHandler *dump = [SYDumpHandler new];
     dump.viewController = self;
+    SYThreadHandler *thr = [SYThreadHandler new];
+    thr.viewController = self;
+    SYModuleHandler *mod = [SYModuleHandler new];
+    mod.viewController = self;
 
-    _handlers = @[ search, patch, freeze, watch, ptr, dump ];
+    _handlers = @[ search, patch, freeze, watch, ptr, dump, thr, mod ];
     _currentTabIndex = 0;
 }
 

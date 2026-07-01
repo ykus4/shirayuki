@@ -46,6 +46,71 @@ void WatchManager::removeAll() {
     m_entries.clear();
 }
 
+void WatchManager::setTrigger(uint64_t id, CompareMode condition, const void *threshold,
+                              size_t thresholdLen, bool oneShot,
+                              std::function<void(const WatchEntry &)> callback) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    for (auto &entry : m_entries) {
+        if (entry.id != id)
+            continue;
+        entry.hasTrigger = true;
+        entry.condition = condition;
+        entry.oneShot = oneShot;
+        entry.onTriggered = std::move(callback);
+        if (threshold && thresholdLen > 0) {
+            entry.threshold.assign(reinterpret_cast<const uint8_t *>(threshold),
+                                   reinterpret_cast<const uint8_t *>(threshold) + thresholdLen);
+        } else {
+            entry.threshold.clear();
+        }
+        return;
+    }
+}
+
+void WatchManager::clearTrigger(uint64_t id) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    for (auto &entry : m_entries) {
+        if (entry.id != id)
+            continue;
+        entry.hasTrigger = false;
+        entry.threshold.clear();
+        entry.onTriggered = nullptr;
+        return;
+    }
+}
+
+// Evaluate whether the trigger condition holds for this entry's current bytes.
+// Kept module-local — used only by the polling loop.
+static bool evaluateTrigger(const WatchEntry &entry) {
+    if (!entry.hasTrigger)
+        return false;
+    size_t sz = entry.currentValue.size();
+    if (!sz)
+        return false;
+
+    const uint8_t *cur = entry.currentValue.data();
+    const uint8_t *ref =
+        entry.threshold.empty() ? entry.previousValue.data() : entry.threshold.data();
+
+    switch (entry.condition) {
+        case CompareMode::Exact:
+            return memcmp(cur, ref, sz) == 0;
+        case CompareMode::Changed:
+            return memcmp(cur, entry.previousValue.data(), sz) != 0;
+        case CompareMode::Unchanged:
+            return memcmp(cur, entry.previousValue.data(), sz) == 0;
+        case CompareMode::Increased:
+            return compareTypedBytes(cur, entry.previousValue.data(), entry.type) > 0;
+        case CompareMode::Decreased:
+            return compareTypedBytes(cur, entry.previousValue.data(), entry.type) < 0;
+        case CompareMode::GreaterThan:
+            return compareTypedBytes(cur, ref, entry.type) > 0;
+        case CompareMode::LessThan:
+            return compareTypedBytes(cur, ref, entry.type) < 0;
+    }
+    return false;
+}
+
 void WatchManager::setActive(uint64_t id, bool active) {
     std::lock_guard<std::mutex> lock(m_mutex);
     for (auto &entry : m_entries) {
@@ -81,9 +146,11 @@ void WatchManager::stop() {
 
 void WatchManager::loop() {
     while (!m_stopRequested.load()) {
-        // Collect changed entries and callback outside the lock to avoid deadlock
         WatchCallback cbCopy;
-        std::vector<WatchEntry> triggered;
+        std::vector<WatchEntry> changed;
+
+        // (entry snapshot, per-entry trigger callback) pairs — fire after lock release.
+        std::vector<std::pair<WatchEntry, std::function<void(const WatchEntry &)>>> triggerFires;
 
         {
             std::lock_guard<std::mutex> lock(m_mutex);
@@ -106,17 +173,27 @@ void WatchManager::loop() {
                     entry.changeCount++;
                     entry.lastChangeTime = std::chrono::steady_clock::now();
                     if (cbCopy) {
-                        triggered.push_back(entry);
+                        changed.push_back(entry);
                     }
                 } else {
                     entry.hasChanged = false;
                 }
+
+                if (entry.hasTrigger && evaluateTrigger(entry) && entry.onTriggered) {
+                    triggerFires.push_back({entry, entry.onTriggered});
+                    if (entry.oneShot) {
+                        entry.hasTrigger = false;
+                        entry.onTriggered = nullptr;
+                    }
+                }
             }
         }
 
-        // Invoke callbacks after releasing lock
-        for (auto &e : triggered) {
+        for (auto &e : changed) {
             cbCopy(e);
+        }
+        for (auto &pair : triggerFires) {
+            pair.second(pair.first);
         }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(m_intervalMs.load()));

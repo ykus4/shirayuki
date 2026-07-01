@@ -16,6 +16,8 @@ Shirayuki_FILES = Tweak/Tweak.xm \
 	ShirayukiMemory/ValueFormat.cpp \
 	ShirayukiMemory/Freeze.cpp \
 	ShirayukiMemory/PointerScan.cpp \
+	ShirayukiMemory/Speedhack.cpp \
+	ShirayukiMemory/ThreadList.cpp \
 	ShirayukiMemory/Watchpoint.cpp \
 	ShirayukiMemory/Session.mm \
 	GUI/ShirayukiWindow.m \
@@ -24,13 +26,16 @@ Shirayuki_FILES = Tweak/Tweak.xm \
 	GUI/SYResultCell.m \
 	GUI/SYDragButton.m \
 	GUI/SYToast.m \
+	GUI/SYHotkey.m \
 	GUI/Handlers/SYScanHelper.cpp \
 	GUI/Handlers/SYSearchHandler.mm \
 	GUI/Handlers/SYPatchHandler.mm \
 	GUI/Handlers/SYFreezeHandler.mm \
 	GUI/Handlers/SYWatchHandler.mm \
 	GUI/Handlers/SYPointerHandler.mm \
-	GUI/Handlers/SYDumpHandler.mm
+	GUI/Handlers/SYDumpHandler.mm \
+	GUI/Handlers/SYThreadHandler.mm \
+	GUI/Handlers/SYModuleHandler.mm
 
 Shirayuki_CFLAGS = -fobjc-arc \
 	-I$(THEOS_PROJECT_DIR)/ShirayukiMemory \
