@@ -1,5 +1,6 @@
 #import "SYPointerHandler.h"
 #import "PointerScan.hpp"
+#import "SYDispatchUtil.h"
 #import "SYResultCell.h"
 #import "SYTheme.h"
 #import "SYToast.h"
@@ -53,34 +54,37 @@ static NSString *const kCellID = @"SYCell";
     [_results removeAllObjects];
     [SYToast show:@"Scanning pointers..." type:SYToastInfo];
 
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        PointerScanConfig config;
-        config.targetAddress = (uintptr_t)addr;
-        config.maxDepth = depth;
-        config.maxOffset = maxOff;
-        config.maxResults = 50;
+    __block NSMutableArray *localResults = nil;
+    __block size_t chainCount = 0;
 
-        auto chains = PointerScanner::scan(config);
+    SYAsync(
+        ^{
+            PointerScanConfig config;
+            config.targetAddress = (uintptr_t)addr;
+            config.maxDepth = depth;
+            config.maxOffset = maxOff;
+            config.maxResults = 50;
 
-        NSMutableArray *localResults = [NSMutableArray new];
-        for (auto &chain : chains) {
-            uintptr_t resolved = chain.resolve();
-            BOOL valid = (resolved == (uintptr_t)addr);
-            [localResults addObject:@{
-                @"desc" : @(chain.toString().c_str()),
-                @"valid" : @(valid),
-                @"depth" : @(chain.offsets.size())
-            }];
-        }
-        size_t chainCount = chains.size();
+            auto chains = PointerScanner::scan(config);
 
-        dispatch_async(dispatch_get_main_queue(), ^{
+            localResults = [NSMutableArray new];
+            for (auto &chain : chains) {
+                uintptr_t resolved = chain.resolve();
+                BOOL valid = (resolved == (uintptr_t)addr);
+                [localResults addObject:@{
+                    @"desc" : @(chain.toString().c_str()),
+                    @"valid" : @(valid),
+                    @"depth" : @(chain.offsets.size())
+                }];
+            }
+            chainCount = chains.size();
+        },
+        ^{
             [self.results setArray:localResults];
             [SYToast show:[NSString stringWithFormat:@"%zu chains", chainCount]
                      type:SYToastSuccess];
             [self.viewController reloadTable];
         });
-    });
 }
 
 - (NSInteger)numberOfRows {
