@@ -15,7 +15,10 @@ Shirayuki_FILES = Tweak/Tweak.xm \
 	ShirayukiMemory/Patch.cpp \
 	ShirayukiMemory/ValueFormat.cpp \
 	ShirayukiMemory/Freeze.cpp \
+	ShirayukiMemory/GroupScan.cpp \
 	ShirayukiMemory/PointerScan.cpp \
+	ShirayukiMemory/ReadCache.cpp \
+	ShirayukiMemory/Snapshot.cpp \
 	ShirayukiMemory/Watchpoint.cpp \
 	ShirayukiMemory/Session.mm \
 	GUI/ShirayukiWindow.m \

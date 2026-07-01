@@ -141,6 +141,11 @@ std::vector<uintptr_t> findString(uintptr_t start, size_t len, const std::string
 // Regex search (matches against null-terminated strings in the region)
 std::vector<uintptr_t> findRegex(uintptr_t start, size_t len, const std::string &pattern);
 
+// Fuzzy numeric search — matches values within ±tolerance of the given value.
+// Only meaningful for Int32/Int64/Float32/Float64; other types return an empty result.
+std::vector<uintptr_t> findValueFuzzy(uintptr_t start, size_t len, double value, double tolerance,
+                                      ValueType type);
+
 // Narrowing: filter candidates by comparing current vs snapshot
 struct Candidate {
     uintptr_t address;
@@ -149,6 +154,13 @@ struct Candidate {
 
 std::vector<Candidate> narrowResults(const std::vector<Candidate> &candidates, ValueType type,
                                      CompareMode mode, const void *compareValue = nullptr);
+
+// Seed candidates for an "unknown initial value" scan: enumerate every aligned slot of
+// the given type in `[start, start+len)`, capturing the current bytes as the snapshot.
+// The caller then narrows with CompareMode::Changed/Unchanged/Increased/Decreased.
+// Bounded by `maxCandidates` to keep memory in check on large regions.
+std::vector<Candidate> seedUnknownCandidates(uintptr_t start, size_t len, ValueType type,
+                                             size_t maxCandidates);
 } // namespace Scanner
 
 // --- Memory patch (apply/restore) ---
