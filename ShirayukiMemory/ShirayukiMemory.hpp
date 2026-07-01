@@ -3,14 +3,9 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <deque>
-#include <functional>
 #include <mach-o/dyld.h>
-#include <mach-o/getsect.h>
 #include <mach/mach.h>
-#include <regex>
 #include <string>
-#include <sys/mman.h>
 #include <vector>
 
 namespace Shirayuki {
@@ -104,6 +99,11 @@ enum class ValueType { Int8, UInt8, Int16, UInt16, Int32, UInt32, Int64, UInt64,
 
 size_t valueTypeSize(ValueType type);
 std::string valueTypeLabel(ValueType type);
+
+// Typed 3-way comparison of two same-typed values (a and b must be at least
+// valueTypeSize(type) bytes). Returns -1/0/+1 like memcmp — but interprets
+// the bytes according to the given ValueType (so signed/float compare correctly).
+int compareTypedBytes(const uint8_t *a, const uint8_t *b, ValueType type);
 
 // --- Scanner compare mode (for narrowing) ---
 enum class CompareMode {

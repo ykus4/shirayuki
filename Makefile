@@ -7,7 +7,13 @@ include $(THEOS)/makefiles/common.mk
 TWEAK_NAME = Shirayuki
 
 Shirayuki_FILES = Tweak/Tweak.xm \
-	ShirayukiMemory/ShirayukiMemory.cpp \
+	ShirayukiMemory/Memory.cpp \
+	ShirayukiMemory/Image.cpp \
+	ShirayukiMemory/Scanner.cpp \
+	ShirayukiMemory/Disasm.cpp \
+	ShirayukiMemory/Hex.cpp \
+	ShirayukiMemory/Patch.cpp \
+	ShirayukiMemory/ValueFormat.cpp \
 	ShirayukiMemory/Freeze.cpp \
 	ShirayukiMemory/PointerScan.cpp \
 	ShirayukiMemory/Watchpoint.cpp \

@@ -106,12 +106,7 @@ static NSString *const kCellID = @"SYCell";
             @"applied" : @YES
         } mutableCopy];
         [_patches addObject:entry];
-        // Record undo: "remove the last entry"
-        [_undoStack addObject:@{
-            @"action" : @"remove",
-            @"id" : entry[@"id"],
-            @"index" : @(_patches.count - 1)
-        }];
+        [_undoStack addObject:@{@"action" : @"remove", @"id" : entry[@"id"]}];
         [_redoStack removeAllObjects];
         [SYToast show:[NSString stringWithFormat:@"Patched 0x%llX", addr] type:SYToastSuccess];
     } else {
@@ -171,14 +166,14 @@ static NSString *const kCellID = @"SYCell";
         auto bytes = Hex::toBytes([entry[@"original"] UTF8String]);
         Memory::write(addr, bytes.data(), bytes.size());
         entry[@"applied"] = @NO;
-        [_undoStack addObject:@{@"action" : @"reapply", @"id" : entry[@"id"], @"index" : @(row)}];
+        [_undoStack addObject:@{@"action" : @"reapply", @"id" : entry[@"id"]}];
         [_redoStack removeAllObjects];
         [SYToast show:@"Restored" type:SYToastInfo];
     } else {
         auto bytes = Hex::toBytes([entry[@"hex"] UTF8String]);
         Memory::write(addr, bytes.data(), bytes.size());
         entry[@"applied"] = @YES;
-        [_undoStack addObject:@{@"action" : @"restore", @"id" : entry[@"id"], @"index" : @(row)}];
+        [_undoStack addObject:@{@"action" : @"restore", @"id" : entry[@"id"]}];
         [_redoStack removeAllObjects];
         [SYToast show:@"Re-applied" type:SYToastSuccess];
     }
@@ -229,7 +224,7 @@ static NSString *const kCellID = @"SYCell";
         uintptr_t addr = [entry[@"address"] unsignedLongLongValue];
         auto bytes = Hex::toBytes([entry[@"original"] UTF8String]);
         Memory::write(addr, bytes.data(), bytes.size());
-        [_redoStack addObject:@{@"action" : @"readd", @"entry" : entry, @"index" : @(idx)}];
+        [_redoStack addObject:@{@"action" : @"readd", @"entry" : entry}];
         [_patches removeObjectAtIndex:idx];
     } else if ([action isEqualToString:@"restore"] && idx >= 0) {
         // Undo a re-apply: restore original
@@ -238,7 +233,7 @@ static NSString *const kCellID = @"SYCell";
         auto bytes = Hex::toBytes([entry[@"original"] UTF8String]);
         Memory::write(addr, bytes.data(), bytes.size());
         entry[@"applied"] = @NO;
-        [_redoStack addObject:@{@"action" : @"reapply", @"id" : patchId, @"index" : @(idx)}];
+        [_redoStack addObject:@{@"action" : @"reapply", @"id" : patchId}];
     } else if ([action isEqualToString:@"reapply"] && idx >= 0) {
         // Undo a restore: re-apply patch
         NSMutableDictionary *entry = _patches[idx];
@@ -246,7 +241,7 @@ static NSString *const kCellID = @"SYCell";
         auto bytes = Hex::toBytes([entry[@"hex"] UTF8String]);
         Memory::write(addr, bytes.data(), bytes.size());
         entry[@"applied"] = @YES;
-        [_redoStack addObject:@{@"action" : @"restore", @"id" : patchId, @"index" : @(idx)}];
+        [_redoStack addObject:@{@"action" : @"restore", @"id" : patchId}];
     }
 
     [SYToast show:@"Undone" type:SYToastInfo];
@@ -262,15 +257,14 @@ static NSString *const kCellID = @"SYCell";
     NSString *action = item[@"action"];
 
     if ([action isEqualToString:@"readd"]) {
-        // Redo an apply: re-apply and re-insert
+        // Redo an apply: re-apply and re-append (order preserved by insertion sequence)
         NSMutableDictionary *entry = [item[@"entry"] mutableCopy];
         uintptr_t addr = [entry[@"address"] unsignedLongLongValue];
         auto bytes = Hex::toBytes([entry[@"hex"] UTF8String]);
         Memory::write(addr, bytes.data(), bytes.size());
         entry[@"applied"] = @YES;
-        NSUInteger idx = MIN([item[@"index"] unsignedIntegerValue], _patches.count);
-        [_patches insertObject:entry atIndex:idx];
-        [_undoStack addObject:@{@"action" : @"remove", @"id" : entry[@"id"], @"index" : @(idx)}];
+        [_patches addObject:entry];
+        [_undoStack addObject:@{@"action" : @"remove", @"id" : entry[@"id"]}];
     } else if ([action isEqualToString:@"reapply"]) {
         NSInteger idx = [self indexForPatchId:item[@"id"]];
         if (idx < 0)
@@ -280,7 +274,7 @@ static NSString *const kCellID = @"SYCell";
         auto bytes = Hex::toBytes([entry[@"hex"] UTF8String]);
         Memory::write(addr, bytes.data(), bytes.size());
         entry[@"applied"] = @YES;
-        [_undoStack addObject:@{@"action" : @"restore", @"id" : item[@"id"], @"index" : @(idx)}];
+        [_undoStack addObject:@{@"action" : @"restore", @"id" : item[@"id"]}];
     } else if ([action isEqualToString:@"restore"]) {
         NSInteger idx = [self indexForPatchId:item[@"id"]];
         if (idx < 0)
@@ -290,7 +284,7 @@ static NSString *const kCellID = @"SYCell";
         auto bytes = Hex::toBytes([entry[@"original"] UTF8String]);
         Memory::write(addr, bytes.data(), bytes.size());
         entry[@"applied"] = @NO;
-        [_undoStack addObject:@{@"action" : @"reapply", @"id" : item[@"id"], @"index" : @(idx)}];
+        [_undoStack addObject:@{@"action" : @"reapply", @"id" : item[@"id"]}];
     }
 
     [SYToast show:@"Redone" type:SYToastSuccess];

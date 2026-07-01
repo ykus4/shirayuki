@@ -1,4 +1,5 @@
 #import "SYSearchHandler.h"
+#import "SYDispatchUtil.h"
 #import "SYResultCell.h"
 #import "SYScanHelper.hpp"
 #import "SYTheme.h"
@@ -97,30 +98,35 @@ static NSString *const kCellID = @"SYCell";
 
     NSString *searchType = _searchType;
 
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        // SYScanAll is a plain C function — no C++ syntax in this block
-        size_t count = 0, valSize = 4;
-        uintptr_t *hits = SYScanAll([searchType UTF8String], [input UTF8String], kMaxScanResults,
-                                    kMaxRegionSize, &count, &valSize);
+    __block NSMutableArray *localResults = nil;
+    __block NSMutableArray *localCandidates = nil;
+    __block size_t count = 0;
 
-        NSMutableArray *localResults = [NSMutableArray arrayWithCapacity:count];
-        NSMutableArray *localCandidates = [NSMutableArray arrayWithCapacity:count];
+    SYAsync(
+        ^{
+            // SYScanAll is a plain C function — no C++ syntax in this block
+            size_t valSize = 4;
+            uintptr_t *hits = SYScanAll([searchType UTF8String], [input UTF8String],
+                                        kMaxScanResults, kMaxRegionSize, &count, &valSize);
 
-        for (size_t k = 0; k < count; k++) {
-            uintptr_t addr = hits[k];
-            [localResults addObject:@(addr)];
-            NSMutableDictionary *c = [NSMutableDictionary new];
-            c[@"address"] = @(addr);
-            if (valSize > 0) {
-                unsigned char buf[8] = {};
-                SYMemRead(addr, buf, valSize);
-                c[@"snapshot"] = [NSData dataWithBytes:buf length:valSize];
+            localResults = [NSMutableArray arrayWithCapacity:count];
+            localCandidates = [NSMutableArray arrayWithCapacity:count];
+
+            for (size_t k = 0; k < count; k++) {
+                uintptr_t addr = hits[k];
+                [localResults addObject:@(addr)];
+                NSMutableDictionary *c = [NSMutableDictionary new];
+                c[@"address"] = @(addr);
+                if (valSize > 0) {
+                    unsigned char buf[8] = {};
+                    SYMemRead(addr, buf, valSize);
+                    c[@"snapshot"] = [NSData dataWithBytes:buf length:valSize];
+                }
+                [localCandidates addObject:c];
             }
-            [localCandidates addObject:c];
-        }
-        SYScanFreeResults(hits);
-
-        dispatch_async(dispatch_get_main_queue(), ^{
+            SYScanFreeResults(hits);
+        },
+        ^{
             [self.results setArray:localResults];
             [self.candidates setArray:localCandidates];
             self.searching = NO;
@@ -130,54 +136,10 @@ static NSString *const kCellID = @"SYCell";
             [SYToast show:msg type:count > 0 ? SYToastSuccess : SYToastWarning];
             [self.viewController reloadTable];
         });
-    });
 }
 
 - (void)narrow:(NSString *)mode {
-    NSArray *snapshot = [_candidates copy];
-    size_t valSize = [self currentValueSize];
-
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        NSMutableArray *kept = [NSMutableArray new];
-
-        for (NSMutableDictionary *c in snapshot) {
-            uintptr_t addr = [c[@"address"] unsignedLongLongValue];
-            NSData *prev = c[@"snapshot"];
-            if (!prev)
-                continue;
-
-            uint8_t current[8] = {};
-            if (Memory::read(addr, current, valSize) != Status::Success)
-                continue;
-
-            const uint8_t *prevBytes = (const uint8_t *)prev.bytes;
-            BOOL keep = NO;
-            if ([mode isEqualToString:@"changed"]) {
-                keep = (memcmp(current, prevBytes, valSize) != 0);
-            } else if ([mode isEqualToString:@"unchanged"]) {
-                keep = (memcmp(current, prevBytes, valSize) == 0);
-            } else if ([mode isEqualToString:@"increased"]) {
-                keep = (memcmp(current, prevBytes, valSize) > 0);
-            } else if ([mode isEqualToString:@"decreased"]) {
-                keep = (memcmp(current, prevBytes, valSize) < 0);
-            }
-
-            if (keep) {
-                c[@"snapshot"] = [NSData dataWithBytes:current length:valSize];
-                [kept addObject:c];
-            }
-        }
-
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [self.candidates setArray:kept];
-            [self.results removeAllObjects];
-            for (NSDictionary *c in kept)
-                [self.results addObject:c[@"address"]];
-            [SYToast show:[NSString stringWithFormat:@"Narrowed to %lu", (unsigned long)kept.count]
-                     type:SYToastInfo];
-            [self.viewController reloadTable];
-        });
-    });
+    [self narrowWithMode:mode target:nil toastPrefix:@"Narrowed to"];
 }
 
 - (void)narrowExact:(NSString *)input {
@@ -185,34 +147,64 @@ static NSString *const kCellID = @"SYCell";
     uint8_t targetBuf[8] = {};
     SYValueTypeUtil::parseValue(input, _searchType, targetBuf);
     NSData *targetData = [NSData dataWithBytes:targetBuf length:valSize];
+    [self narrowWithMode:@"exact" target:targetData toastPrefix:@"Exact:"];
+}
 
+// Unified narrow: `target` is nil for changed/unchanged/increased/decreased,
+// non-nil for the "exact match" variant. Result publishing is identical for both.
+- (void)narrowWithMode:(NSString *)mode
+                target:(NSData *)target
+           toastPrefix:(NSString *)toastPrefix {
     NSArray *snapshot = [_candidates copy];
+    size_t valSize = [self currentValueSize];
+    ValueType vtype = SYValueTypeUtil::fromString(_searchType);
+    __block NSMutableArray *kept = nil;
 
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        NSMutableArray *kept = [NSMutableArray new];
-        const void *target = targetData.bytes;
+    SYAsync(
+        ^{
+            kept = [NSMutableArray new];
+            const uint8_t *targetBytes = target ? (const uint8_t *)target.bytes : NULL;
 
-        for (NSMutableDictionary *c in snapshot) {
-            uintptr_t addr = [c[@"address"] unsignedLongLongValue];
-            uint8_t current[8] = {};
-            if (Memory::read(addr, current, valSize) != Status::Success)
-                continue;
-            if (memcmp(current, target, valSize) == 0) {
-                c[@"snapshot"] = [NSData dataWithBytes:current length:valSize];
-                [kept addObject:c];
+            for (NSMutableDictionary *c in snapshot) {
+                uintptr_t addr = [c[@"address"] unsignedLongLongValue];
+                uint8_t current[8] = {};
+                if (Memory::read(addr, current, valSize) != Status::Success)
+                    continue;
+
+                BOOL keep = NO;
+                if (targetBytes) {
+                    keep = (memcmp(current, targetBytes, valSize) == 0);
+                } else {
+                    NSData *prev = c[@"snapshot"];
+                    if (!prev)
+                        continue;
+                    const uint8_t *prevBytes = (const uint8_t *)prev.bytes;
+                    if ([mode isEqualToString:@"changed"])
+                        keep = (memcmp(current, prevBytes, valSize) != 0);
+                    else if ([mode isEqualToString:@"unchanged"])
+                        keep = (memcmp(current, prevBytes, valSize) == 0);
+                    else if ([mode isEqualToString:@"increased"])
+                        keep = (compareTypedBytes(current, prevBytes, vtype) > 0);
+                    else if ([mode isEqualToString:@"decreased"])
+                        keep = (compareTypedBytes(current, prevBytes, vtype) < 0);
+                }
+
+                if (keep) {
+                    c[@"snapshot"] = [NSData dataWithBytes:current length:valSize];
+                    [kept addObject:c];
+                }
             }
-        }
-
-        dispatch_async(dispatch_get_main_queue(), ^{
+        },
+        ^{
             [self.candidates setArray:kept];
             [self.results removeAllObjects];
             for (NSDictionary *c in kept)
                 [self.results addObject:c[@"address"]];
-            [SYToast show:[NSString stringWithFormat:@"Exact: %lu", (unsigned long)kept.count]
-                     type:SYToastInfo];
+            [SYToast
+                show:[NSString stringWithFormat:@"%@ %lu", toastPrefix, (unsigned long)kept.count]
+                type:SYToastInfo];
             [self.viewController reloadTable];
         });
-    });
 }
 
 - (size_t)currentValueSize {

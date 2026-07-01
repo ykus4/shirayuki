@@ -6,57 +6,87 @@
 
 using namespace Shirayuki;
 
+// Typed value scan dispatched by ValueType. Each branch reads the parsed bytes
+// as the concrete integer/float type so findValue does a bitwise-exact match.
+static std::vector<uintptr_t> scanTypedValue(uintptr_t start, size_t len, ValueType type,
+                                             const uint8_t *bytes) {
+    switch (type) {
+        case ValueType::Int8: {
+            int8_t v;
+            memcpy(&v, bytes, 1);
+            return Scanner::findValue<int8_t>(start, len, v);
+        }
+        case ValueType::UInt8: {
+            uint8_t v;
+            memcpy(&v, bytes, 1);
+            return Scanner::findValue<uint8_t>(start, len, v);
+        }
+        case ValueType::Int16: {
+            int16_t v;
+            memcpy(&v, bytes, 2);
+            return Scanner::findValue<int16_t>(start, len, v);
+        }
+        case ValueType::UInt16: {
+            uint16_t v;
+            memcpy(&v, bytes, 2);
+            return Scanner::findValue<uint16_t>(start, len, v);
+        }
+        case ValueType::Int32: {
+            int32_t v;
+            memcpy(&v, bytes, 4);
+            return Scanner::findValue<int32_t>(start, len, v);
+        }
+        case ValueType::UInt32: {
+            uint32_t v;
+            memcpy(&v, bytes, 4);
+            return Scanner::findValue<uint32_t>(start, len, v);
+        }
+        case ValueType::Int64: {
+            int64_t v;
+            memcpy(&v, bytes, 8);
+            return Scanner::findValue<int64_t>(start, len, v);
+        }
+        case ValueType::UInt64: {
+            uint64_t v;
+            memcpy(&v, bytes, 8);
+            return Scanner::findValue<uint64_t>(start, len, v);
+        }
+        case ValueType::Float32: {
+            float v;
+            memcpy(&v, bytes, 4);
+            return Scanner::findValue<float>(start, len, v);
+        }
+        case ValueType::Float64: {
+            double v;
+            memcpy(&v, bytes, 8);
+            return Scanner::findValue<double>(start, len, v);
+        }
+    }
+    return {};
+}
+
 static std::vector<uintptr_t> scanRegionCpp(uintptr_t start, size_t len, const std::string &t,
                                             const std::string &v, size_t &outValSize) {
-    outValSize = 4;
-    if (t == "int32") {
-        uint8_t buf[8] = {};
-        if (!ValueFormat::parse(v, ValueType::Int32, buf))
-            return {};
-        int32_t val;
-        memcpy(&val, buf, sizeof(val));
-        return Scanner::findValue<int32_t>(start, len, val);
-    } else if (t == "int16") {
-        outValSize = 2;
-        uint8_t buf[8] = {};
-        if (!ValueFormat::parse(v, ValueType::Int16, buf))
-            return {};
-        int16_t val;
-        memcpy(&val, buf, sizeof(val));
-        return Scanner::findValue<int16_t>(start, len, val);
-    } else if (t == "int64") {
-        outValSize = 8;
-        uint8_t buf[8] = {};
-        if (!ValueFormat::parse(v, ValueType::Int64, buf))
-            return {};
-        int64_t val;
-        memcpy(&val, buf, sizeof(val));
-        return Scanner::findValue<int64_t>(start, len, val);
-    } else if (t == "float") {
-        uint8_t buf[8] = {};
-        if (!ValueFormat::parse(v, ValueType::Float32, buf))
-            return {};
-        float val;
-        memcpy(&val, buf, sizeof(val));
-        return Scanner::findValue<float>(start, len, val);
-    } else if (t == "double") {
-        outValSize = 8;
-        uint8_t buf[8] = {};
-        if (!ValueFormat::parse(v, ValueType::Float64, buf))
-            return {};
-        double val;
-        memcpy(&val, buf, sizeof(val));
-        return Scanner::findValue<double>(start, len, val);
-    } else if (t == "hex") {
+    if (t == "hex") {
         outValSize = 0;
         return Scanner::findPattern(start, len, v);
-    } else if (t == "regex") {
+    }
+    if (t == "regex") {
         outValSize = 0;
         return Scanner::findRegex(start, len, v);
-    } else {
+    }
+    if (t == "string") {
         outValSize = v.size();
         return Scanner::findString(start, len, v);
     }
+
+    // Numeric type: parse the input using ValueFormat, then dispatch to Scanner::findValue<T>.
+    ValueType vt = ValueFormat::fromTag(t);
+    outValSize = valueTypeSize(vt);
+    uint8_t buf[8] = {};
+    if (!ValueFormat::parse(v, vt, buf))
+        return {};
+    return scanTypedValue(start, len, vt, buf);
 }
 
 static uintptr_t *vectorToHeap(const std::vector<uintptr_t> &v, size_t *outCount) {
