@@ -49,3 +49,12 @@ plugins:
 
 nav:
   - Home: index.md
+  - Install: install.md
+  - Usage: usage.md
+  - Features: features.md
+  - Reference:
+      - Architecture: architecture.md
+      - C++ API: api.md
+  - Contributing:
+      - Development: development.md
+      - Release: release.md
