@@ -107,7 +107,13 @@ excluded, since it needs the Logos preprocessor.
 
 - Dev builds: version auto-computed as `BASE-dev.N+sha` in CI
 - Release: `git tag v0.x.0 && git push origin v0.x.0` — triggers release workflow
-- Version source of truth: `layout/DEBIAN/control` `Version:` field
+- **The tag is the source of truth for a release.** `release.yml` rewrites
+  `layout/DEBIAN/control`'s `Version:` from the tag name before building, so the
+  value committed there only affects local and dev builds. Keep it in step with
+  the latest tag anyway, so a local `make package` produces a sensibly named
+  `.deb`.
+- A failed Theos build fails the workflow before the release is published, so a
+  bad tag yields no release — but the tag still exists and has to be deleted.
 
 ## Code style
 

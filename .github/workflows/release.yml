@@ -67,6 +67,13 @@ jobs:
             ## Install
             Download the `.deb` file and install via `dpkg -i` or a file manager on your jailbroken device.
 
-            **Requirements**: Jailbroken iOS 15.0+ (arm64), Substrate or Substitute
+            **Requirements**: Jailbroken iOS 15.0+ (arm64), ElleKit or Substrate.
+
+            This package is built **rootless**, which is what every iOS 15+
+            jailbreak (palera1n, Dopamine, XinaA15) uses. For a legacy rooted
+            jailbreak, build from source with `make THEOS_PACKAGE_SCHEME= package`.
+
+            The tweak loads into all UIKit applications; tap the floating
+            snowflake button to open the panel.
           files: packages/*.deb
           fail_on_unmatched_files: true
