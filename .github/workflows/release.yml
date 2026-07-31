@@ -16,12 +16,12 @@ jobs:
       THEOS: ${{ github.workspace }}/theos
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Cache Theos
-        uses: actions/cache@v6
+        uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/theos
           key: theos-${{ runner.os }}-${{ hashFiles('.github/workflows/release.yml') }}
@@ -33,7 +33,7 @@ jobs:
           fi
 
       - name: Cache SDKs
-        uses: actions/cache@v6
+        uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/theos/sdks
           key: theos-sdks-${{ runner.os }}-iPhoneOS16.5
@@ -59,7 +59,7 @@ jobs:
         run: make clean && make package
 
       - name: Create Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: Shirayuki ${{ github.ref_name }}
@@ -67,6 +67,13 @@ jobs:
             ## Install
             Download the `.deb` file and install via `dpkg -i` or a file manager on your jailbroken device.
 
-            **Requirements**: Jailbroken iOS 15.0+ (arm64), Substrate or Substitute
+            **Requirements**: Jailbroken iOS 15.0+ (arm64), ElleKit or Substrate.
+
+            This package is built **rootless**, which is what every iOS 15+
+            jailbreak (palera1n, Dopamine, XinaA15) uses. For a legacy rooted
+            jailbreak, build from source with `make THEOS_PACKAGE_SCHEME= package`.
+
+            The tweak loads into all UIKit applications; tap the floating
+            snowflake button to open the panel.
           files: packages/*.deb
           fail_on_unmatched_files: true

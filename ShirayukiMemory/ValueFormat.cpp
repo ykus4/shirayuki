@@ -1,6 +1,10 @@
 #include "ShirayukiMemory.hpp"
+#include <cerrno>
+#include <charconv>
+#include <cstdlib>
 #include <cstring>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <type_traits>
 
@@ -23,7 +27,7 @@ size_t valueTypeSize(ValueType type) {
         case ValueType::Float64:
             return 8;
     }
-    return 4;
+    return kDefaultValueSize;
 }
 
 std::string valueTypeLabel(ValueType type) {
@@ -80,83 +84,249 @@ template <typename F> auto dispatchByType(ValueType type, F &&f) {
     return f((int32_t *)nullptr);
 }
 
+namespace {
+
+// --- Tag vocabulary -------------------------------------------------------
+
+// One row per ValueType, in enumerator order. `canonical` is the stable
+// identifier written to sessions and JSON; `shortTag` mirrors valueTypeLabel so
+// a tag produced anywhere in the UI still resolves; `alt` covers the legacy
+// "float32"/"float64" spellings.
+struct TagRow {
+    ValueType type;
+    const char *canonical;
+    const char *shortTag;
+    const char *alt;
+};
+
+constexpr TagRow kTagRows[] = {
+    {ValueType::Int8, "int8", "i8", nullptr},
+    {ValueType::UInt8, "uint8", "u8", nullptr},
+    {ValueType::Int16, "int16", "i16", nullptr},
+    {ValueType::UInt16, "uint16", "u16", nullptr},
+    {ValueType::Int32, "int32", "i32", nullptr},
+    {ValueType::UInt32, "uint32", "u32", nullptr},
+    {ValueType::Int64, "int64", "i64", nullptr},
+    {ValueType::UInt64, "uint64", "u64", nullptr},
+    {ValueType::Float32, "float", "f32", "float32"},
+    {ValueType::Float64, "double", "f64", "float64"},
+};
+
+constexpr size_t kTagRowCount = sizeof(kTagRows) / sizeof(kTagRows[0]);
+
+// The table must stay aligned with the enum: one row per enumerator, in order,
+// so index == static_cast<size_t>(type).
+static_assert(kTagRowCount == static_cast<size_t>(ValueType::Float64) + 1,
+              "kTagRows must have one row per ValueType enumerator");
+
+const TagRow &tagRow(ValueType type) {
+    const size_t i = static_cast<size_t>(type);
+    return i < kTagRowCount ? kTagRows[i] : kTagRows[static_cast<size_t>(ValueType::Int32)];
+}
+
+std::string trimmed(const std::string &s) {
+    const char *ws = " \t\r\n\f\v";
+    size_t b = s.find_first_not_of(ws);
+    if (b == std::string::npos)
+        return {};
+    size_t e = s.find_last_not_of(ws);
+    return s.substr(b, e - b + 1);
+}
+
+// --- Parsing --------------------------------------------------------------
+
+// Parse an entire string as an integer of type T. Accepts an optional sign and
+// an optional 0x/0X prefix for hexadecimal. Returns false for empty input,
+// stray characters anywhere (including trailing), and out-of-range values.
+//
+// std::stoll/stoull silently accepted trailing garbage ("12abc" parsed as 12)
+// and range-checked only against the widest type, so a value of 300 written into
+// an int8 truncated to 44 instead of being refused. Never throws: input arrives
+// straight from a UITextField, and an exception escaping this translation unit
+// through ObjC frames calls std::terminate.
+template <typename T> bool parseIntegral(const std::string &in, T &out) {
+    static_assert(std::is_integral<T>::value, "parseIntegral requires an integral type");
+
+    const std::string s = trimmed(in);
+    if (s.empty())
+        return false;
+
+    size_t i = 0;
+    bool negative = false;
+    if (s[i] == '+' || s[i] == '-') {
+        negative = (s[i] == '-');
+        ++i;
+    }
+    if (negative && !std::is_signed<T>::value)
+        return false;
+
+    int base = 10;
+    if (i + 2 <= s.size() && s[i] == '0' && (s[i + 1] == 'x' || s[i + 1] == 'X')) {
+        base = 16;
+        i += 2;
+    }
+    if (i >= s.size())
+        return false;
+
+    // from_chars rejects leading whitespace, signs and stray characters without
+    // throwing, which is exactly the contract we need.
+    unsigned long long magnitude = 0;
+    const char *begin = s.data() + i;
+    const char *end = s.data() + s.size();
+    auto res = std::from_chars(begin, end, magnitude, base);
+    if (res.ec != std::errc() || res.ptr != end)
+        return false;
+
+    if (negative) {
+        // |min| for a signed T is max + 1, computed in unsigned arithmetic so
+        // INT64_MIN does not overflow on the way.
+        const unsigned long long limit =
+            static_cast<unsigned long long>(std::numeric_limits<T>::max()) + 1ull;
+        if (magnitude > limit)
+            return false;
+        out = static_cast<T>(0ull - magnitude);
+        return true;
+    }
+
+    if (magnitude > static_cast<unsigned long long>(std::numeric_limits<T>::max()))
+        return false;
+    out = static_cast<T>(magnitude);
+    return true;
+}
+
+// Parse an entire string as a floating point value. std::from_chars for
+// floating point is not available across the libc++ versions this targets, so
+// strtof/strtod are used with an explicit end pointer and an errno check.
+template <typename T> bool parseFloating(const std::string &in, T &out) {
+    static_assert(std::is_floating_point<T>::value, "parseFloating requires a float type");
+
+    const std::string s = trimmed(in);
+    if (s.empty())
+        return false;
+
+    errno = 0;
+    char *endp = nullptr;
+    T v;
+    if constexpr (std::is_same<T, float>::value)
+        v = std::strtof(s.c_str(), &endp);
+    else
+        v = std::strtod(s.c_str(), &endp);
+
+    if (endp != s.c_str() + s.size())
+        return false;
+    if (errno == ERANGE)
+        return false;
+
+    out = v;
+    return true;
+}
+
+} // namespace
+
 namespace ValueFormat {
 
 std::string format(const uint8_t *buf, ValueType type) {
-    std::ostringstream ss;
+    if (!buf)
+        return {};
     return dispatchByType(type, [&](auto tag) -> std::string {
         using T = typename std::remove_pointer<decltype(tag)>::type;
-        T v;
+        T v{};
         memcpy(&v, buf, sizeof(T));
         std::ostringstream os;
-        if constexpr (std::is_same<T, int8_t>::value) {
-            os << (int)v;
-        } else if constexpr (std::is_same<T, uint8_t>::value) {
-            os << (unsigned)v;
-        } else if constexpr (std::is_same<T, int32_t>::value) {
-            os << v << " (0x" << std::hex << (uint32_t)v << ")";
-        } else if constexpr (std::is_same<T, float>::value) {
-            os << std::fixed << std::setprecision(3) << v;
-        } else if constexpr (std::is_same<T, double>::value) {
-            os << std::fixed << std::setprecision(5) << v;
+        if constexpr (std::is_floating_point<T>::value) {
+            // max_digits10 is what makes parse(format(x)) == x bit-exact; fixed
+            // notation at 3 or 5 decimals silently rounded the value away.
+            os << std::setprecision(std::numeric_limits<T>::max_digits10) << v;
+        } else if constexpr (std::is_signed<T>::value) {
+            // Promote so int8_t/uint8_t print as numbers rather than characters.
+            os << static_cast<long long>(v);
         } else {
-            os << v;
+            os << static_cast<unsigned long long>(v);
         }
         return os.str();
     });
 }
 
-size_t parse(const std::string &input, ValueType type, uint8_t buf[8]) {
-    memset(buf, 0, 8);
-    if (input.empty())
-        return 0;
+std::string formatDisplay(const uint8_t *buf, ValueType type) {
+    if (!buf)
+        return {};
+    return dispatchByType(type, [&](auto tag) -> std::string {
+        using T = typename std::remove_pointer<decltype(tag)>::type;
+        T v{};
+        memcpy(&v, buf, sizeof(T));
+        std::ostringstream os;
+        if constexpr (std::is_same<T, float>::value) {
+            // Fixed notation is easier to scan in a table cell than the
+            // round-trippable form.
+            os << std::fixed << std::setprecision(3) << v;
+        } else if constexpr (std::is_same<T, double>::value) {
+            os << std::fixed << std::setprecision(5) << v;
+        } else {
+            // Hex annotation for every integer type, not just Int32. Going
+            // through the unsigned counterpart makes -1 read as 0xFF rather
+            // than a sign-extended 0xFFFFFFFFFFFFFFFF.
+            using U = typename std::make_unsigned<T>::type;
+            os << format(buf, type) << " (0x" << std::hex << std::uppercase
+               << static_cast<unsigned long long>(static_cast<U>(v)) << ")";
+        }
+        return os.str();
+    });
+}
 
-    try {
-        return dispatchByType(type, [&](auto tag) -> size_t {
-            using T = typename std::remove_pointer<decltype(tag)>::type;
-            T v;
-            if constexpr (std::is_same<T, float>::value)
-                v = std::stof(input);
-            else if constexpr (std::is_same<T, double>::value)
-                v = std::stod(input);
-            else if constexpr (std::is_unsigned<T>::value)
-                v = static_cast<T>(std::stoull(input));
-            else
-                v = static_cast<T>(std::stoll(input));
-            memcpy(buf, &v, sizeof(T));
-            return sizeof(T);
-        });
-    } catch (...) {
+size_t parse(const std::string &input, ValueType type, uint8_t buf[kMaxValueSize]) {
+    if (!buf)
         return 0;
+    memset(buf, 0, kMaxValueSize);
+
+    return dispatchByType(type, [&](auto tag) -> size_t {
+        using T = typename std::remove_pointer<decltype(tag)>::type;
+        T v{};
+        if constexpr (std::is_floating_point<T>::value) {
+            if (!parseFloating<T>(input, v))
+                return 0;
+        } else {
+            if (!parseIntegral<T>(input, v))
+                return 0;
+        }
+        memcpy(buf, &v, sizeof(T));
+        return sizeof(T);
+    });
+}
+
+bool tryFromTag(const std::string &tag, ValueType &out) {
+    const std::string t = trimmed(tag);
+    if (t.empty())
+        return false;
+    for (size_t i = 0; i < kTagRowCount; i++) {
+        const TagRow &row = kTagRows[i];
+        if (t == row.canonical || t == row.shortTag || (row.alt && t == row.alt)) {
+            out = row.type;
+            return true;
+        }
     }
+    return false;
 }
 
 ValueType fromTag(const std::string &tag) {
-    if (tag == "int8")
-        return ValueType::Int8;
-    if (tag == "uint8")
-        return ValueType::UInt8;
-    if (tag == "int16")
-        return ValueType::Int16;
-    if (tag == "uint16")
-        return ValueType::UInt16;
-    if (tag == "int32")
-        return ValueType::Int32;
-    if (tag == "uint32")
-        return ValueType::UInt32;
-    if (tag == "int64")
-        return ValueType::Int64;
-    if (tag == "uint64")
-        return ValueType::UInt64;
-    if (tag == "float" || tag == "float32")
-        return ValueType::Float32;
-    if (tag == "double" || tag == "float64")
-        return ValueType::Float64;
-    return ValueType::Int32;
+    // Lenient by design: legacy call sites pass a tag straight from a session
+    // file or a UI label and expect a usable type back.
+    ValueType out = ValueType::Int32;
+    tryFromTag(tag, out);
+    return out;
 }
 
 std::string toTag(ValueType type) {
-    return valueTypeLabel(type);
+    // The canonical tag, not valueTypeLabel: returning the short label made
+    // fromTag(toTag(t)) collapse 9 of 10 types to Int32.
+    return tagRow(type).canonical;
+}
+
+std::vector<std::string> allTags() {
+    std::vector<std::string> tags;
+    tags.reserve(kTagRowCount);
+    for (size_t i = 0; i < kTagRowCount; i++)
+        tags.push_back(kTagRows[i].canonical);
+    return tags;
 }
 
 } // namespace ValueFormat
@@ -164,6 +334,8 @@ std::string toTag(ValueType type) {
 // Compare two typed values pointed to by a and b. Returns -1/0/1 like memcmp.
 // Public entry point declared in ShirayukiMemory.hpp.
 int compareTypedBytes(const uint8_t *a, const uint8_t *b, ValueType type) {
+    if (!a || !b)
+        return 0;
     return dispatchByType(type, [&](auto tag) -> int {
         using T = std::remove_pointer_t<decltype(tag)>;
         T va, vb;

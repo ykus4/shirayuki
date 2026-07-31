@@ -207,10 +207,16 @@ static NSString *const kCellID = @"SYCell";
 }
 
 - (void)narrowExact:(NSString *)input {
-    size_t valSize = [self currentValueSize];
-    uint8_t targetBuf[8] = {};
-    SYValueTypeUtil::parseValue(input, _searchType, targetBuf);
-    NSData *targetData = [NSData dataWithBytes:targetBuf length:valSize];
+    uint8_t targetBuf[kMaxValueSize] = {};
+    // Report a bad value instead of filtering for zero: the discarded return
+    // meant a typo silently narrowed the result set to addresses holding 0.
+    const size_t n = SYValueTypeUtil::parseValue(input, _searchType, targetBuf);
+    if (n == 0) {
+        [SYToast show:[NSString stringWithFormat:@"Invalid %@ value", _searchType]
+                 type:SYToastError];
+        return;
+    }
+    NSData *targetData = [NSData dataWithBytes:targetBuf length:n];
     [self narrowWithMode:@"exact" target:targetData toastPrefix:@"Exact:"];
 }
 
@@ -272,24 +278,37 @@ static NSString *const kCellID = @"SYCell";
 }
 
 - (size_t)currentValueSize {
-    if ([_searchType isEqualToString:@"int16"])
-        return 2;
-    if ([_searchType isEqualToString:@"int64"] || [_searchType isEqualToString:@"double"])
-        return 8;
-    return 4;
+    // Defer to the core rather than re-deriving widths from strings here. The
+    // hand-rolled version this replaces returned 4 for int8, uint8, uint16 and
+    // every unsigned type, and 4 for "hex"/"string"/"regex" too.
+    return SYValueTypeUtil::sizeOfTag(_searchType);
 }
 
 - (void)batchModify:(NSString *)value {
-    size_t valSize = [self currentValueSize];
-    uint8_t buf[8] = {};
-    SYValueTypeUtil::parseValue(value, _searchType, buf);
+    uint8_t buf[kMaxValueSize] = {};
+    // The discarded parse result meant an unparseable value wrote the zeroed
+    // buffer to every address in the result set.
+    const size_t n = SYValueTypeUtil::parseValue(value, _searchType, buf);
+    if (n == 0) {
+        [SYToast show:[NSString stringWithFormat:@"Invalid %@ value", _searchType]
+                 type:SYToastError];
+        return;
+    }
 
     size_t count = 0;
     for (NSNumber *addr in _results) {
-        if (Memory::write([addr unsignedLongLongValue], buf, valSize) == Status::Success)
+        if (Memory::write([addr unsignedLongLongValue], buf, n) == Status::Success)
             count++;
     }
-    [SYToast show:[NSString stringWithFormat:@"Modified %zu addresses", count] type:SYToastSuccess];
+    const size_t total = _results.count;
+    if (count == total) {
+        [SYToast show:[NSString stringWithFormat:@"Modified %zu addresses", count]
+                 type:SYToastSuccess];
+    } else {
+        [SYToast show:[NSString stringWithFormat:@"Modified %zu of %zu (%zu failed)", count, total,
+                                                 total - count]
+                 type:SYToastWarning];
+    }
 }
 
 - (void)resetSearch {
@@ -356,9 +375,13 @@ static NSString *const kCellID = @"SYCell";
                                         forIndexPath:[NSIndexPath indexPathForRow:row inSection:0]];
 
     uintptr_t addr = [_results[row] unsignedLongLongValue];
-    uint8_t buf[8] = {};
-    Memory::read(addr, buf, [self currentValueSize]);
-    NSString *valueStr = SYValueTypeUtil::formatValue(buf, _searchType);
+    uint8_t buf[kMaxValueSize] = {};
+    // displayValue, not formatValue: the cell wants the annotated form. Say so
+    // plainly when the address can no longer be read, rather than formatting a
+    // zeroed buffer as if it were a real value.
+    NSString *valueStr = @"<unreadable>";
+    if (Memory::read(addr, buf, [self currentValueSize]) == Status::Success)
+        valueStr = SYValueTypeUtil::displayValue(buf, _searchType);
 
     [cell configureWithIcon:[SYTheme icon:@"memorychip" size:14]
                       title:[NSString stringWithFormat:@"0x%lX", addr]

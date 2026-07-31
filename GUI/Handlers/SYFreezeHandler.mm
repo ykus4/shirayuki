@@ -55,34 +55,47 @@ static NSString *const kCellID = @"SYCell";
     NSString *valStr = parts[1];
     NSString *typeStr = parts.count > 2 ? parts[2] : @"i32";
 
-    // Map short type tags (f32/f64/i64/i32) to canonical names for util
-    NSDictionary *typeMap = @{
-        @"f32" : @"float",
-        @"f64" : @"double",
-        @"i64" : @"int64",
-        @"i32" : @"int32",
-        @"i16" : @"int16"
-    };
-    NSString *canonicalType = typeMap[typeStr] ?: typeStr;
-    ValueType vtype = SYValueTypeUtil::fromString(canonicalType);
-    uint8_t buf[8] = {};
+    // ValueFormat::fromTag accepts both the short labels ("f32") and the
+    // canonical tags ("float"), so the translation dictionary this replaces is
+    // gone. It also silently accepted anything it did not recognise, freezing as
+    // int32 while labelling the row with whatever was typed; an unknown tag is
+    // now reported.
+    ValueType vtype = ValueType::Int32;
+    if (!SYValueTypeUtil::tryFromString(typeStr, vtype)) {
+        [SYToast show:[NSString stringWithFormat:@"Unknown type: %@", typeStr] type:SYToastError];
+        return;
+    }
+    NSString *canonicalType = SYValueTypeUtil::canonicalTag(vtype);
+
+    uint8_t buf[kMaxValueSize] = {};
     size_t valSize = SYValueTypeUtil::parseValue(valStr, canonicalType, buf);
     if (!valSize) {
-        [SYToast show:@"Invalid value" type:SYToastWarning];
+        [SYToast show:[NSString stringWithFormat:@"Invalid %@ value", canonicalType]
+                 type:SYToastError];
         return;
     }
 
     auto &fm = FreezeManager::shared();
     uint64_t fid = fm.add(addr, buf, valSize, vtype, "");
+    // IDs start at 1, so 0 means the entry was not added. Ignoring this left a
+    // row on screen claiming FROZEN with nothing behind it.
+    if (fid == 0) {
+        [SYToast show:@"Could not add freeze" type:SYToastError];
+        return;
+    }
 
     if (!fm.isRunning())
-        fm.start(16);
+        fm.start(kFreezeIntervalMs);
 
+    // Store the canonical tag and the value as it was actually parsed. Storing
+    // the raw input meant the row echoed whatever was typed — including a tag
+    // that had silently fallen back to int32, labelling the row with a type it
+    // was not frozen as.
     NSMutableDictionary *entry = [@{
         @"id" : @(fid),
         @"address" : @(addr),
-        @"value" : valStr,
-        @"type" : typeStr,
+        @"value" : SYValueTypeUtil::formatValue(buf, canonicalType),
+        @"type" : canonicalType,
         @"active" : @YES
     } mutableCopy];
     [_entries addObject:entry];

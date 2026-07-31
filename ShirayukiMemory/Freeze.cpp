@@ -5,8 +5,13 @@
 namespace Shirayuki {
 
 FreezeManager &FreezeManager::shared() {
-    static FreezeManager instance;
-    return instance;
+    // Deliberately leaked. A function-local static would be destroyed via
+    // atexit, and this code lives in a dylib injected into a host app: joining
+    // a worker thread during process teardown is a known way to deadlock, and
+    // the entries are worthless at that point anyway. The destructor remains for
+    // tests, which own their instances explicitly.
+    static FreezeManager *instance = new FreezeManager();
+    return *instance;
 }
 
 FreezeManager::~FreezeManager() {
@@ -99,24 +104,47 @@ void FreezeManager::setAutoIncrement(uint64_t id, bool enabled, int64_t step) {
     }
 }
 
+void FreezeManager::setInterval(uint32_t ms) {
+    if (ms < kMinWorkerIntervalMs)
+        ms = kMinWorkerIntervalMs;
+    if (ms > kMaxWorkerIntervalMs)
+        ms = kMaxWorkerIntervalMs;
+    m_intervalMs.store(ms);
+    // Apply immediately rather than after the current wait expires.
+    m_wakeup.notify_all();
+}
+
 void FreezeManager::start(uint32_t intervalMs) {
-    // Prevent double-start race
+    // Serialise against stop(): assigning to a std::thread that is still
+    // joinable calls std::terminate, and the CAS below cannot prevent a start
+    // that races a stop still inside its join().
+    std::lock_guard<std::mutex> lifecycle(m_lifecycleMutex);
+
+    setInterval(intervalMs);
+
     bool expected = false;
     if (!m_running.compare_exchange_strong(expected, true))
         return;
 
-    m_intervalMs.store(intervalMs);
-    m_stopRequested.store(false);
+    // A previous worker may have exited without being joined yet.
+    if (m_thread.joinable())
+        m_thread.join();
 
+    m_stopRequested.store(false);
     m_thread = std::thread(&FreezeManager::loop, this);
 }
 
 void FreezeManager::stop() {
+    std::lock_guard<std::mutex> lifecycle(m_lifecycleMutex);
+
     m_stopRequested.store(true);
     m_running.store(false);
-    if (m_thread.joinable()) {
+    // Wake the worker out of its wait so the join below does not have to sit
+    // through the rest of the poll interval.
+    m_wakeup.notify_all();
+
+    if (m_thread.joinable())
         m_thread.join();
-    }
 }
 
 void FreezeManager::loop() {
@@ -138,26 +166,38 @@ void FreezeManager::loop() {
                     if (Memory::read(entry.address, current.data(), sz) != Status::Success)
                         continue;
 
+                    // Threshold comparisons go through compareTypedBytes, which
+                    // orders numerically. memcmp compares the low byte first on
+                    // little-endian ARM64, so a bytewise ">" is wrong for every
+                    // multi-byte type and for all signed and float values — the
+                    // same bug that was fixed for narrowing.
+                    const size_t typeWidth = valueTypeSize(entry.type);
+                    const bool thresholdUsable =
+                        entry.threshold.size() >= typeWidth && sz >= typeWidth;
+
                     bool shouldWrite = false;
                     switch (entry.condition) {
                         case CompareMode::GreaterThan:
-                            if (!entry.threshold.empty()) {
-                                int cmp = memcmp(current.data(), entry.threshold.data(),
-                                                 std::min(sz, entry.threshold.size()));
-                                shouldWrite = (cmp > 0);
-                            }
+                            shouldWrite = thresholdUsable &&
+                                          compareTypedBytes(current.data(), entry.threshold.data(),
+                                                            entry.type) > 0;
                             break;
                         case CompareMode::LessThan:
-                            if (!entry.threshold.empty()) {
-                                int cmp = memcmp(current.data(), entry.threshold.data(),
-                                                 std::min(sz, entry.threshold.size()));
-                                shouldWrite = (cmp < 0);
-                            }
+                            shouldWrite = thresholdUsable &&
+                                          compareTypedBytes(current.data(), entry.threshold.data(),
+                                                            entry.type) < 0;
+                            break;
+                        case CompareMode::Unchanged:
+                            shouldWrite = (current == entry.value);
                             break;
                         case CompareMode::Changed:
                             shouldWrite = (current != entry.value);
                             break;
-                        default:
+                        case CompareMode::Exact:
+                        case CompareMode::Increased:
+                        case CompareMode::Decreased:
+                            // Not meaningful as a freeze trigger: there is no
+                            // prior sample to compare against here.
                             shouldWrite = true;
                             break;
                     }
@@ -210,7 +250,13 @@ void FreezeManager::loop() {
             cb(args.first, args.second);
         }
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(m_intervalMs.load()));
+        // Wait on the stop flag rather than sleeping, so stop() and setInterval()
+        // take effect immediately instead of after the current interval elapses.
+        {
+            std::unique_lock<std::mutex> wakeLock(m_wakeupMutex);
+            m_wakeup.wait_for(wakeLock, std::chrono::milliseconds(m_intervalMs.load()),
+                              [this] { return m_stopRequested.load(); });
+        }
     }
 }
 

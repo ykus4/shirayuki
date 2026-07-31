@@ -4,8 +4,13 @@
 namespace Shirayuki {
 
 WatchManager &WatchManager::shared() {
-    static WatchManager instance;
-    return instance;
+    // Deliberately leaked. A function-local static would be destroyed via
+    // atexit, and this code lives in a dylib injected into a host app: joining
+    // a worker thread during process teardown is a known way to deadlock, and
+    // the entries are worthless at that point anyway. The destructor remains for
+    // tests, which own their instances explicitly.
+    static WatchManager *instance = new WatchManager();
+    return *instance;
 }
 
 WatchManager::~WatchManager() {
@@ -127,21 +132,40 @@ void WatchManager::setCallback(WatchCallback callback) {
 }
 
 void WatchManager::start(uint32_t intervalMs) {
+    // Serialise against stop(): assigning to a std::thread that is still
+    // joinable calls std::terminate, and the CAS below cannot prevent a start
+    // that races a stop still inside its join().
+    std::lock_guard<std::mutex> lifecycle(m_lifecycleMutex);
+
+    // An interval of 0 would spin; an unbounded one would stall shutdown.
+    if (intervalMs < kMinWorkerIntervalMs)
+        intervalMs = kMinWorkerIntervalMs;
+    if (intervalMs > kMaxWorkerIntervalMs)
+        intervalMs = kMaxWorkerIntervalMs;
+    m_intervalMs.store(intervalMs);
+
     bool expected = false;
     if (!m_running.compare_exchange_strong(expected, true))
         return;
 
-    m_intervalMs.store(intervalMs);
+    // A previous worker may have exited without being joined yet.
+    if (m_thread.joinable())
+        m_thread.join();
+
     m_stopRequested.store(false);
     m_thread = std::thread(&WatchManager::loop, this);
 }
 
 void WatchManager::stop() {
+    std::lock_guard<std::mutex> lifecycle(m_lifecycleMutex);
+
     m_stopRequested.store(true);
     m_running.store(false);
-    if (m_thread.joinable()) {
+    // Wake the worker so the join does not wait out the poll interval.
+    m_wakeup.notify_all();
+
+    if (m_thread.joinable())
         m_thread.join();
-    }
 }
 
 void WatchManager::loop() {
@@ -196,7 +220,13 @@ void WatchManager::loop() {
             pair.second(pair.first);
         }
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(m_intervalMs.load()));
+        // Wait on the stop flag rather than sleeping, so stop() takes effect
+        // immediately instead of after the current interval elapses.
+        {
+            std::unique_lock<std::mutex> wakeLock(m_wakeupMutex);
+            m_wakeup.wait_for(wakeLock, std::chrono::milliseconds(m_intervalMs.load()),
+                              [this] { return m_stopRequested.load(); });
+        }
     }
 }
 
