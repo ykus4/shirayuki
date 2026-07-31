@@ -55,12 +55,16 @@ uintptr_t Image::absoluteAddress(const std::string &imageName, uintptr_t offset)
 }
 
 uintptr_t Image::findSymbol(const std::string &imageName, const std::string &symbolName) {
+    // RTLD_NOLOAD only returns a handle for an already-loaded image, so this
+    // never triggers a load. The handle is released only after the symbol has
+    // been read out — dlclose first can unmap the very address being returned.
     void *handle = dlopen(imageName.c_str(), RTLD_NOLOAD);
     if (!handle)
         return 0;
     void *sym = dlsym(handle, symbolName.c_str());
+    const uintptr_t address = reinterpret_cast<uintptr_t>(sym);
     dlclose(handle);
-    return (uintptr_t)sym;
+    return address;
 }
 
 uintptr_t Image::findSymbol(const ImageInfo &img, const std::string &symbolName) {

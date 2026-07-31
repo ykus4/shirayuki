@@ -1,14 +1,18 @@
 #import "SYWatchHandler.h"
+
 #import "SYResultCell.h"
 #import "SYTheme.h"
 #import "SYToast.h"
 #import "SYValueTypeUtil.h"
+#import "ShirayukiConfig.hpp"
 #import "ShirayukiViewController.h"
 #import "Watchpoint.hpp"
 
 using namespace Shirayuki;
 
 static NSString *const kCellID = @"SYCell";
+
+static const NSTimeInterval kRefreshInterval = 0.5;
 
 @interface SYWatchHandler ()
 @property (nonatomic, strong) NSTimer *refreshTimer;
@@ -19,17 +23,25 @@ static NSString *const kCellID = @"SYCell";
 - (instancetype)init {
     self = [super init];
     if (self) {
-        // Auto-refresh table every 500ms when watch is active
-        _refreshTimer =
-            [NSTimer scheduledTimerWithTimeInterval:0.5
-                                            repeats:YES
-                                              block:^(NSTimer *t) {
-                                                  if (WatchManager::shared().count() > 0) {
-                                                      dispatch_async(dispatch_get_main_queue(), ^{
-                                                          [self.viewController reloadTable];
-                                                      });
-                                                  }
-                                              }];
+        // The timer captures self weakly. Capturing it strongly created a cycle
+        // — self owns the timer, the run loop owns the timer, and the block owned
+        // self — so dealloc never ran, the invalidate below never executed, and
+        // the 500 ms refresh kept firing for the life of the process.
+        __weak __typeof__(self) weakSelf = self;
+        _refreshTimer = [NSTimer
+            scheduledTimerWithTimeInterval:kRefreshInterval
+                                   repeats:YES
+                                     block:^(NSTimer *timer) {
+                                         __strong __typeof__(weakSelf) strongSelf = weakSelf;
+                                         if (!strongSelf) {
+                                             [timer invalidate];
+                                             return;
+                                         }
+                                         // NSTimer block callbacks already run on
+                                         // the scheduling run loop, which is main.
+                                         if (WatchManager::shared().count() > 0)
+                                             [strongSelf.viewController reloadTable];
+                                     }];
     }
     return self;
 }
@@ -62,22 +74,20 @@ static NSString *const kCellID = @"SYCell";
         return;
     }
 
-    NSDictionary *typeMap = @{
-        @"f32" : @"float",
-        @"f64" : @"double",
-        @"i64" : @"int64",
-        @"i32" : @"int32",
-        @"i16" : @"int16",
-        @"i8" : @"int8"
-    };
+    // Same dictionary removal as the freeze tab. Note the two copies had drifted:
+    // this one listed "i8" and the freeze one did not, and their fallbacks
+    // differed, so the same input could mean different things on the two tabs.
     NSString *typeTag = parts.count > 1 ? parts[1] : @"i32";
-    NSString *canonicalType = typeMap[typeTag] ?: @"int32";
-    ValueType type = SYValueTypeUtil::fromString(canonicalType);
+    ValueType type = ValueType::Int32;
+    if (!SYValueTypeUtil::tryFromString(typeTag, type)) {
+        [SYToast show:[NSString stringWithFormat:@"Unknown type: %@", typeTag] type:SYToastError];
+        return;
+    }
 
     auto &wm = WatchManager::shared();
     wm.add((uintptr_t)addr, type, "");
     if (!wm.isRunning())
-        wm.start(100);
+        wm.start(kWatchIntervalMs);
 
     [SYToast show:@"Watchpoint added" type:SYToastSuccess];
     [self.viewController reloadTable];

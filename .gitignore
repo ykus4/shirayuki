@@ -60,3 +60,10 @@ fastlane/report.xml
 fastlane/Preview.html
 fastlane/screenshots/**/*.png
 fastlane/test_output
+
+# Host verification harness artifacts
+build/
+compile_commands.json
+
+# clangd index cache
+.cache/

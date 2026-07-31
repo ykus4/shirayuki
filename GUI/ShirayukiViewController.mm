@@ -8,10 +8,12 @@
 #import "Handlers/SYSearchHandler.h"
 #import "Handlers/SYThreadHandler.h"
 #import "Handlers/SYWatchHandler.h"
+#import "SYInput.h"
 #import "SYResultCell.h"
 #import "SYTabHandler.h"
 #import "SYTheme.h"
 #import "SYToast.h"
+#import "SYValueTypeUtil.h"
 #import "Session.hpp"
 #import "ShirayukiMemory.hpp"
 #import "ShirayukiWindow.h"
@@ -701,68 +703,77 @@ static NSString *const kHistoryCellID = @"SYHistoryCell";
 }
 
 - (void)showModifyAlertForAddress:(uintptr_t)addr type:(NSString *)type {
-    NSString *currentStr;
-    if ([type isEqualToString:@"float"]) {
-        float v = Memory::readValue<float>(addr);
-        currentStr = [NSString stringWithFormat:@"%.3f", v];
-    } else if ([type isEqualToString:@"double"]) {
-        double v = Memory::readValue<double>(addr);
-        currentStr = [NSString stringWithFormat:@"%.5f", v];
-    } else if ([type isEqualToString:@"int64"]) {
-        int64_t v = Memory::readValue<int64_t>(addr);
-        currentStr = [NSString stringWithFormat:@"%lld", v];
-    } else {
-        int32_t v = Memory::readValue<int32_t>(addr);
-        currentStr = [NSString stringWithFormat:@"%d", v];
+    const size_t valSize = Shirayuki::valueTypeSize(SYValueTypeUtil::fromString(type));
+
+    // Read first and bail out if it fails. Formatting a zero-filled buffer would
+    // prefill the edit field with "0", and accepting that prefill writes a real
+    // zero into memory — a failed read turning into actual corruption. The
+    // per-type if/else this replaces also treated int16 and every unsigned type
+    // as int32.
+    uint8_t buf[Shirayuki::kMaxValueSize] = {};
+    if (Memory::read(addr, buf, valSize) != Status::Success) {
+        [SYToast show:[NSString stringWithFormat:@"Cannot read %@", SYFormatAddress(addr)]
+                 type:SYToastError];
+        return;
     }
 
+    // Plain form for the edit field (re-parseable), annotated form for the label.
+    NSString *editStr = SYValueTypeUtil::formatValue(buf, type);
+    NSString *displayStr = SYValueTypeUtil::displayValue(buf, type);
+
     UIAlertController *alert = [UIAlertController
-        alertControllerWithTitle:[NSString stringWithFormat:@"0x%lX", addr]
-                         message:[NSString stringWithFormat:@"Current: %@", currentStr]
+        alertControllerWithTitle:SYFormatAddress(addr)
+                         message:[NSString stringWithFormat:@"Current: %@ (%@)", displayStr, type]
                   preferredStyle:UIAlertControllerStyleAlert];
 
     [alert addTextFieldWithConfigurationHandler:^(UITextField *tf) {
-        tf.text = currentStr;
+        tf.text = editStr;
         tf.font = [SYTheme monoMedium];
-        tf.keyboardType = UIKeyboardTypeDecimalPad;
+        // Not DecimalPad: negative values, hex entry and exponents all need the
+        // full keyboard, and every type is parsed through ValueFormat anyway.
+        tf.keyboardType = UIKeyboardTypeASCIICapable;
+        tf.autocorrectionType = UITextAutocorrectionTypeNo;
+        tf.autocapitalizationType = UITextAutocapitalizationTypeNone;
+        tf.clearButtonMode = UITextFieldViewModeAlways;
     }];
 
-    [alert addAction:[UIAlertAction actionWithTitle:@"Write"
-                                              style:UIAlertActionStyleDefault
-                                            handler:^(UIAlertAction *a) {
-                                                NSString *val = alert.textFields.firstObject.text;
-                                                if ([type isEqualToString:@"float"]) {
-                                                    float v = [val floatValue];
-                                                    Memory::writeValue<float>(addr, v);
-                                                } else if ([type isEqualToString:@"double"]) {
-                                                    double v = [val doubleValue];
-                                                    Memory::writeValue<double>(addr, v);
-                                                } else if ([type isEqualToString:@"int64"]) {
-                                                    int64_t v = [val longLongValue];
-                                                    Memory::writeValue<int64_t>(addr, v);
-                                                } else {
-                                                    int32_t v = [val intValue];
-                                                    Memory::writeValue<int32_t>(addr, v);
-                                                }
-                                                [SYToast show:@"Written" type:SYToastSuccess];
-                                                [self reloadTable];
-                                            }]];
+    [alert
+        addAction:[UIAlertAction
+                      actionWithTitle:@"Write"
+                                style:UIAlertActionStyleDefault
+                              handler:^(UIAlertAction *a) {
+                                  NSString *val = alert.textFields.firstObject.text;
+                                  uint8_t out[Shirayuki::kMaxValueSize] = {};
+                                  const size_t n = SYValueTypeUtil::parseValue(val, type, out);
+                                  if (n == 0) {
+                                      [SYToast
+                                          show:[NSString stringWithFormat:@"Invalid %@ value", type]
+                                          type:SYToastError];
+                                      return;
+                                  }
+                                  if (Memory::write(addr, out, n) != Status::Success) {
+                                      [SYToast show:@"Write failed" type:SYToastError];
+                                      return;
+                                  }
+                                  [SYToast show:@"Written" type:SYToastSuccess];
+                                  [self reloadTable];
+                              }]];
 
     [alert addAction:[UIAlertAction actionWithTitle:@"Freeze"
                                               style:UIAlertActionStyleDefault
                                             handler:^(UIAlertAction *a) {
                                                 NSString *val = alert.textFields.firstObject.text;
                                                 NSString *cmd = [NSString
-                                                    stringWithFormat:@"0x%lX %@", addr, val];
+                                                    stringWithFormat:@"%@ %@",
+                                                                     SYFormatAddress(addr), val];
                                                 [self.freezeHandler performAction:cmd];
                                             }]];
 
     [alert addAction:[UIAlertAction actionWithTitle:@"Watch"
                                               style:UIAlertActionStyleDefault
                                             handler:^(UIAlertAction *a) {
-                                                NSString *cmd =
-                                                    [NSString stringWithFormat:@"0x%lX", addr];
-                                                [self.watchHandler performAction:cmd];
+                                                [self.watchHandler
+                                                    performAction:SYFormatAddress(addr)];
                                             }]];
 
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"

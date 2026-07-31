@@ -57,6 +57,15 @@ std::string Hex::fromBytes(const std::vector<uint8_t> &data) {
 }
 
 std::string Hex::dump(uintptr_t address, size_t len, size_t bytesPerLine) {
+    if (!len || !bytesPerLine)
+        return {};
+
+    // `len` reaches here straight from a text field. Without a cap, a fat-
+    // fingered length allocates and zero-fills that many bytes before the read
+    // is even attempted — a 1 TB request will exhaust memory rather than fail.
+    if (len > kMaxHexDumpLength)
+        return "<length too large>";
+
     std::ostringstream ss;
     std::vector<uint8_t> buf(len);
 
@@ -81,8 +90,10 @@ std::string Hex::dump(uintptr_t address, size_t len, size_t bytesPerLine) {
 
         ss << " |";
         for (size_t j = 0; j < lineLen; j++) {
-            char c = static_cast<char>(buf[i + j]);
-            ss << (isprint(c) ? c : '.');
+            // isprint takes an int that must be representable as unsigned char;
+            // passing a negative char is undefined.
+            const unsigned char c = buf[i + j];
+            ss << (std::isprint(c) ? static_cast<char>(c) : '.');
         }
         ss << "|\n";
     }

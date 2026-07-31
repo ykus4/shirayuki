@@ -3,6 +3,7 @@
 
 #include "ShirayukiMemory.hpp"
 #include <atomic>
+#include <condition_variable>
 #include <functional>
 #include <mutex>
 #include <optional>
@@ -31,8 +32,16 @@ struct FreezeEntry {
 
 class FreezeManager {
   public:
+    /// App-wide instance. Deliberately never destroyed — see Freeze.cpp.
     static FreezeManager &shared();
+
+    /// Constructible directly so tests can own an instance with a known, empty
+    /// state instead of mutating the process-wide one.
+    FreezeManager() = default;
     ~FreezeManager();
+
+    FreezeManager(const FreezeManager &) = delete;
+    FreezeManager &operator=(const FreezeManager &) = delete;
 
     // Add a freeze entry (returns ID)
     uint64_t add(uintptr_t address, const void *value, size_t len,
@@ -73,17 +82,20 @@ class FreezeManager {
     // Enable auto-increment on an entry
     void setAutoIncrement(uint64_t id, bool enabled, int64_t step = 1);
 
-    // Start/stop the freeze loop
-    void start(uint32_t intervalMs = 16);
+    // Start/stop the freeze loop.
+    //
+    // stop() joins the worker, so it returns only once the loop has finished.
+    // The worker waits on a condition variable rather than sleeping, so that
+    // wait is bounded by how long one pass takes, not by the poll interval.
+    void start(uint32_t intervalMs = kFreezeIntervalMs);
     void stop();
     bool isRunning() const {
         return m_running.load();
     }
 
-    // Set interval
-    void setInterval(uint32_t ms) {
-        m_intervalMs.store(ms);
-    }
+    // Interval in milliseconds, clamped to a sane range: an interval of 0 would
+    // spin, and an unbounded one would stall shutdown.
+    void setInterval(uint32_t ms);
     uint32_t interval() const {
         return m_intervalMs.load();
     }
@@ -96,15 +108,22 @@ class FreezeManager {
     std::optional<FreezeEntry> getEntry(uint64_t id) const;
 
   private:
-    FreezeManager() = default;
     void loop();
 
     mutable std::mutex m_mutex;
     std::vector<FreezeEntry> m_entries;
+
+    // Serialises start() against stop(). Without it, two concurrent calls can
+    // both pass the joinable() check and join the same thread, or assign to a
+    // still-joinable std::thread — which calls std::terminate.
+    std::mutex m_lifecycleMutex;
+    std::condition_variable m_wakeup;
+    std::mutex m_wakeupMutex;
+
     std::atomic<bool> m_running{false};
     std::atomic<bool> m_stopRequested{false};
     std::thread m_thread;
-    std::atomic<uint32_t> m_intervalMs{16};
+    std::atomic<uint32_t> m_intervalMs{kFreezeIntervalMs};
     uint64_t m_nextId = 1;
 };
 

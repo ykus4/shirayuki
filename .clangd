@@ -1,0 +1,30 @@
+# Editor/LSP configuration only — the real builds are driven by the Makefile
+# (Theos, arm64 iOS) and tests/CMakeLists.txt (host C++).
+#
+# Without this, clangd parses the ObjC and ObjC++ headers as plain C++ and floods
+# the editor with bogus "unknown type name 'NSString'" diagnostics.
+
+CompileFlags:
+  Add:
+    - -std=gnu++17
+    - -fobjc-arc
+    - -IShirayukiMemory
+    - -IGUI
+    - -IGUI/Handlers
+    - -Wno-c++17-extensions
+
+---
+# Objective-C++ sources and the headers they share with the C++ core.
+If:
+  PathMatch: [.*\.mm, GUI/.*\.h, GUI/.*/.*\.h]
+CompileFlags:
+  Add:
+    - -xobjective-c++
+
+---
+# Plain Objective-C sources.
+If:
+  PathMatch: .*\.m
+CompileFlags:
+  Add:
+    - -xobjective-c
