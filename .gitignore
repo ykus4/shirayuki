@@ -67,3 +67,6 @@ compile_commands.json
 
 # clangd index cache
 .cache/
+
+# mkdocs build output
+site/
