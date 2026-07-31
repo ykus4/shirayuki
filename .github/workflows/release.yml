@@ -16,12 +16,12 @@ jobs:
       THEOS: ${{ github.workspace }}/theos
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Cache Theos
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ github.workspace }}/theos
           key: theos-${{ runner.os }}-${{ hashFiles('.github/workflows/release.yml') }}
@@ -33,7 +33,7 @@ jobs:
           fi
 
       - name: Cache SDKs
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ github.workspace }}/theos/sdks
           key: theos-sdks-${{ runner.os }}-iPhoneOS16.5
@@ -59,7 +59,7 @@ jobs:
         run: make clean && make package
 
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           name: Shirayuki ${{ github.ref_name }}

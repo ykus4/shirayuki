@@ -17,10 +17,10 @@ jobs:
       THEOS: ${{ github.workspace }}/theos
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Cache Theos
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ github.workspace }}/theos
           key: theos-${{ runner.os }}-${{ hashFiles('.github/workflows/build.yml') }}
@@ -32,7 +32,7 @@ jobs:
           fi
 
       - name: Cache SDKs
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ github.workspace }}/theos/sdks
           key: theos-sdks-${{ runner.os }}-iPhoneOS16.5
@@ -71,14 +71,14 @@ jobs:
 
       - name: Upload .deb
         if: steps.build.outcome == 'success'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.ver.outputs.artifact }}
           path: packages/*.deb
 
       - name: Comment on PR
         if: always() && github.event_name == 'pull_request'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const success = '${{ steps.build.outcome }}' === 'success';
