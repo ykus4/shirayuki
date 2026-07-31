@@ -47,6 +47,11 @@ markdown_extensions:
 plugins:
   - search
 
+# Build dependencies live in docs/ so setup-python can hash them for its cache;
+# they are not site content.
+exclude_docs: |
+  requirements.txt
+
 nav:
   - Home: index.md
   - Install: install.md

@@ -1,0 +1,9 @@
+# Documentation build dependencies.
+#
+# Pinned deliberately. MkDocs 2.0 is announced as removing the plugin system and
+# rewriting theming with no migration path, so an unpinned `mkdocs-material`
+# would break this site without any change on our side.
+#
+# Also gives actions/setup-python something to hash for its pip cache.
+mkdocs-material==9.7.7
+mkdocs==1.6.1

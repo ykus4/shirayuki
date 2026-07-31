@@ -34,9 +34,10 @@ jobs:
         with:
           python-version: '3.x'
           cache: pip
+          cache-dependency-path: docs/requirements.txt
 
       - name: Install MkDocs
-        run: pip install mkdocs-material
+        run: pip install -r docs/requirements.txt
 
       # --strict turns broken internal links and nav references into errors, so a
       # renamed page cannot silently produce a 404.
