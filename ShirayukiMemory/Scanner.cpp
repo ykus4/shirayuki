@@ -248,4 +248,81 @@ std::vector<Scanner::Candidate> Scanner::narrowResults(const std::vector<Candida
     return filtered;
 }
 
+// --- Unknown-initial-value seeding ---
+// Snapshot every aligned slot of `type` inside [start, start+len). No comparison
+// happens here — subsequent `narrowResults` calls do the filtering.
+
+std::vector<Scanner::Candidate>
+Scanner::seedUnknownCandidates(uintptr_t start, size_t len, ValueType type, size_t maxCandidates) {
+    std::vector<Candidate> out;
+    size_t sz = valueTypeSize(type);
+    if (!len || len < sz || !maxCandidates)
+        return out;
+
+    out.reserve(std::min(maxCandidates, len / sz));
+    const uint8_t *buf = reinterpret_cast<const uint8_t *>(start);
+
+    for (size_t i = 0; i + sz <= len && out.size() < maxCandidates; i += sz) {
+        Candidate c;
+        c.address = start + i;
+        c.snapshotValue.assign(buf + i, buf + i + sz);
+        out.push_back(std::move(c));
+    }
+    return out;
+}
+
+// --- Fuzzy scan: exact-value ± tolerance (float/double) ---
+// Declared in ShirayukiMemory.hpp under Scanner.
+
+std::vector<uintptr_t> Scanner::findValueFuzzy(uintptr_t start, size_t len, double value,
+                                               double tolerance, ValueType type) {
+    std::vector<uintptr_t> results;
+    size_t sz = valueTypeSize(type);
+    if (!len || len < sz)
+        return results;
+
+    const uint8_t *buf = reinterpret_cast<const uint8_t *>(start);
+    const size_t stride = sz;
+
+    for (size_t i = 0; i + sz <= len; i += stride) {
+        double current = 0;
+        switch (type) {
+            case ValueType::Float32: {
+                float v;
+                memcpy(&v, buf + i, 4);
+                current = v;
+                break;
+            }
+            case ValueType::Float64: {
+                double v;
+                memcpy(&v, buf + i, 8);
+                current = v;
+                break;
+            }
+            case ValueType::Int32: {
+                int32_t v;
+                memcpy(&v, buf + i, 4);
+                current = v;
+                break;
+            }
+            case ValueType::Int64: {
+                int64_t v;
+                memcpy(&v, buf + i, 8);
+                current = static_cast<double>(v);
+                break;
+            }
+            default:
+                return results; // fuzzy only meaningful for numeric types
+        }
+
+        double diff = current - value;
+        if (diff < 0)
+            diff = -diff;
+        if (diff <= tolerance)
+            results.push_back(start + i);
+    }
+
+    return results;
+}
+
 } // namespace Shirayuki

@@ -80,7 +80,71 @@ static NSString *const kCellID = @"SYCell";
         }
         return;
     }
+    // "?" or empty input on a numeric type starts an unknown-initial-value scan —
+    // it seeds candidates over all readable regions without a comparison target,
+    // so the user can subsequently narrow via changed/inc/dec.
+    if ([input isEqualToString:@"?"] || (!input.length && [self isNumericType])) {
+        [self performUnknownScan];
+        return;
+    }
     [self performSearch:input];
+}
+
+- (BOOL)isNumericType {
+    return ![_searchType isEqualToString:@"hex"] && ![_searchType isEqualToString:@"string"] &&
+           ![_searchType isEqualToString:@"regex"];
+}
+
+- (void)performUnknownScan {
+    if (_searching)
+        return;
+    _searching = YES;
+    [_results removeAllObjects];
+    [_candidates removeAllObjects];
+
+    ValueType vtype = SYValueTypeUtil::fromString(_searchType);
+    __block NSMutableArray *localResults = nil;
+    __block NSMutableArray *localCandidates = nil;
+
+    SYAsync(
+        ^{
+            auto regions = Memory::listRegionsFiltered(RegionFilter::ReadWrite);
+            size_t remaining = kMaxScanResults;
+            localResults = [NSMutableArray new];
+            localCandidates = [NSMutableArray new];
+
+            for (auto &r : regions) {
+                if (!remaining)
+                    break;
+                if (r.size > kMaxRegionSize)
+                    continue;
+                auto seeded = Scanner::seedUnknownCandidates(r.start, r.size, vtype, remaining);
+                for (auto &c : seeded) {
+                    [localResults addObject:@((uint64_t)c.address)];
+                    NSMutableDictionary *d = [NSMutableDictionary new];
+                    d[@"address"] = @((uint64_t)c.address);
+                    d[@"snapshot"] = [NSData dataWithBytes:c.snapshotValue.data()
+                                                    length:c.snapshotValue.size()];
+                    [localCandidates addObject:d];
+                }
+                if (seeded.size() >= remaining) {
+                    remaining = 0;
+                } else {
+                    remaining -= seeded.size();
+                }
+            }
+        },
+        ^{
+            [self.results setArray:localResults];
+            [self.candidates setArray:localCandidates];
+            self.searching = NO;
+            self.hasResults = (self.results.count > 0);
+            self.isNarrowing = self.hasResults;
+            [SYToast show:[NSString stringWithFormat:@"Unknown seeded: %lu",
+                                                     (unsigned long)self.results.count]
+                     type:SYToastInfo];
+            [self.viewController reloadTable];
+        });
 }
 
 - (void)performSearch:(NSString *)input {
