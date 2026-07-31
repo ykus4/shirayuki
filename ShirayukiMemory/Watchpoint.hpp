@@ -4,6 +4,7 @@
 #include "ShirayukiMemory.hpp"
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <functional>
 #include <mutex>
 #include <thread>
@@ -32,8 +33,16 @@ using WatchCallback = std::function<void(const WatchEntry &entry)>;
 
 class WatchManager {
   public:
+    /// App-wide instance. Deliberately never destroyed — see Watchpoint.cpp.
     static WatchManager &shared();
+
+    /// Constructible directly so tests can own an instance with a known, empty
+    /// state instead of mutating the process-wide one.
+    WatchManager() = default;
     ~WatchManager();
+
+    WatchManager(const WatchManager &) = delete;
+    WatchManager &operator=(const WatchManager &) = delete;
 
     // Add a watchpoint
     uint64_t add(uintptr_t address, ValueType type, const std::string &label = "");
@@ -48,8 +57,13 @@ class WatchManager {
     // Set change callback
     void setCallback(WatchCallback callback);
 
-    // Start/stop polling
-    void start(uint32_t intervalMs = 100);
+    // Start/stop polling.
+    //
+    // stop() joins the worker; the worker waits on a condition variable rather
+    // than sleeping, so that join is bounded by one pass rather than by the poll
+    // interval. Callers on the main thread can therefore stop the worker without
+    // stalling the UI for an interval.
+    void start(uint32_t intervalMs = kWatchIntervalMs);
     void stop();
     bool isRunning() const {
         return m_running.load();
@@ -65,15 +79,21 @@ class WatchManager {
     }
 
   private:
-    WatchManager() = default;
     void loop();
 
     mutable std::mutex m_mutex;
     std::vector<WatchEntry> m_entries;
+
+    // Serialises start() against stop(): assigning to a still-joinable
+    // std::thread calls std::terminate.
+    std::mutex m_lifecycleMutex;
+    std::condition_variable m_wakeup;
+    std::mutex m_wakeupMutex;
+
     std::atomic<bool> m_running{false};
     std::atomic<bool> m_stopRequested{false};
     std::thread m_thread;
-    std::atomic<uint32_t> m_intervalMs{100};
+    std::atomic<uint32_t> m_intervalMs{kWatchIntervalMs};
     uint64_t m_nextId = 1;
     WatchCallback m_callback;
 };

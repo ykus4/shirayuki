@@ -1,46 +1,104 @@
 #pragma once
-#include <cstddef>
-#include <cstdint>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include "ShirayukiMemory.hpp"
 
-// Scan all readable/writable regions for the given type+value.
-// Returns heap-allocated array of matching addresses (caller must call SYScanFreeResults).
-// *outCount = number of addresses found (capped at maxResults).
-// *outValSize = byte width of the matched type (0 for pattern/regex/string).
-uintptr_t *SYScanAll(const char *type, const char *input, size_t maxResults, size_t maxRegionSize,
-                     size_t *outCount, size_t *outValSize);
+#include <string>
+#include <vector>
 
-// Scan a single memory region (used internally; exposed for testing).
-uintptr_t *SYScanRegion(uintptr_t start, size_t len, const char *type, const char *input,
-                        size_t *outCount, size_t *outValSize);
+/// Scan and narrow operations for the search tab.
+///
+/// This used to be an `extern "C"` API handing back malloc'd arrays, on the
+/// belief that C++ could not be used from `.mm` inside a dispatch block. That
+/// belief was false (see CLAUDE.md), and the C boundary was actively harmful:
+/// the value width crossed it as a bare `size_t` that the caller then read into
+/// a fixed `unsigned char[8]`, so scanning for a string longer than 8 characters
+/// overflowed the caller's stack buffer.
+///
+/// Snapshots are now captured here, where the value width is known, so no caller
+/// has to size a buffer correctly.
+namespace SYScan {
 
-// Free results array returned by SYScan*.
-void SYScanFreeResults(uintptr_t *results);
-
-// Read `valSize` bytes from `addr` into `buf` (up to 8 bytes). Returns 1 on success.
-int SYMemRead(uintptr_t addr, unsigned char *buf, size_t valSize);
-
-#ifdef __cplusplus
-} // extern "C"
-
-// RAII wrapper for scan results — ensures SYScanFreeResults is always called.
-// Usage (outside dispatch_async blocks only):
-//   ScanResults r;
-//   r.data = SYScanAll(..., &r.count, &r.valSize);
-struct ScanResults {
-    uintptr_t *data = nullptr;
-    size_t count = 0;
-    size_t valSize = 4;
-
-    ScanResults() = default;
-    ~ScanResults() {
-        SYScanFreeResults(data);
-    }
-    ScanResults(const ScanResults &) = delete;
-    ScanResults &operator=(const ScanResults &) = delete;
+enum class Error {
+    None,
+    UnknownType,  // type tag not recognised
+    InvalidValue, // input not parseable for the requested type
+    EmptyPattern, // hex/regex/string search with no needle
+    BadRegex,     // regex failed to compile
 };
 
-#endif // __cplusplus
+/// What to search for. `typeTag` is either a ValueType tag ("int32", "i32",
+/// "float", ...) or one of the non-numeric modes "hex", "regex", "string".
+struct Request {
+    std::string typeTag = "int32";
+    std::string input;
+    size_t maxResults = Shirayuki::kMaxScanResults;
+    size_t maxRegionSize = Shirayuki::kMaxRegionSize;
+};
+
+struct Result {
+    std::vector<uintptr_t> addresses;
+
+    /// Value bytes captured at each hit, `addresses.size() * valueSize` long.
+    /// Empty for the non-numeric modes, where there is no fixed-width value to
+    /// snapshot and hence nothing to narrow against.
+    std::vector<uint8_t> snapshots;
+
+    /// Width of one value in `snapshots`, 0 for non-numeric modes. Always <=
+    /// Shirayuki::kMaxValueSize when non-zero.
+    size_t valueSize = 0;
+
+    Error error = Error::None;
+
+    bool ok() const {
+        return error == Error::None;
+    }
+    /// True when this result can be narrowed (i.e. carries typed snapshots).
+    bool narrowable() const {
+        return valueSize > 0;
+    }
+    size_t count() const {
+        return addresses.size();
+    }
+    const uint8_t *snapshotAt(size_t index) const {
+        if (valueSize == 0 || (index + 1) * valueSize > snapshots.size())
+            return nullptr;
+        return snapshots.data() + index * valueSize;
+    }
+};
+
+/// Human-readable reason for a failed request.
+std::string describe(Error error);
+
+/// Scan every readable/writable region.
+Result scanAll(const Request &request);
+
+/// Scan one region. Exposed for tests and for rescanning a known range.
+Result scanRegion(uintptr_t start, size_t len, const Request &request);
+
+struct NarrowRequest {
+    /// Previous result. `snapshots` and `valueSize` must come from a prior scan
+    /// or narrow of the same type.
+    std::vector<uintptr_t> addresses;
+    std::vector<uint8_t> snapshots;
+    size_t valueSize = 0;
+
+    std::string typeTag = "int32";
+    Shirayuki::CompareMode mode = Shirayuki::CompareMode::Changed;
+
+    /// Needed only by Exact, GreaterThan and LessThan.
+    std::string compareInput;
+};
+
+/// Filter candidates by comparing their current values against the snapshots.
+///
+/// Comparison is numeric, via Shirayuki::compareValues. Doing it with memcmp —
+/// as the ObjC implementation this replaces did — inverts "increased" and
+/// "decreased" for every multi-byte type on little-endian ARM64.
+Result narrow(const NarrowRequest &request);
+
+/// Write `input` (parsed for `typeTag`) to every address. Returns the number of
+/// successful writes, and reports a parse failure rather than writing zeroes.
+size_t writeAll(const std::vector<uintptr_t> &addresses, const std::string &typeTag,
+                const std::string &input, Error &outError);
+
+} // namespace SYScan

@@ -1,0 +1,30 @@
+name: Tests
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  # The core is pure C++ and the Mach VM APIs it uses exist on macOS, so it can
+  # be built and executed on the runner. This is the project's only automated
+  # behavioural coverage — the Theos build only proves things compile.
+  core-tests:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and run core tests
+        run: make test
+
+  # Type-check the ObjC/ObjC++ layer against the real iPhoneOS SDK. Covers
+  # everything the Theos build would except Logos preprocessing of Tweak.xm, and
+  # runs in seconds without downloading Theos or an SDK tarball.
+  ios-syntax:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Type-check GUI sources against iPhoneOS SDK
+        run: make syntax-check

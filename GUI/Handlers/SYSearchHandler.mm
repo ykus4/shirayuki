@@ -1,4 +1,6 @@
 #import "SYSearchHandler.h"
+
+#import "SYInput.h"
 #import "SYResultCell.h"
 #import "SYScanHelper.hpp"
 #import "SYTheme.h"
@@ -10,72 +12,116 @@
 
 using namespace Shirayuki;
 
-static NSString *const kCellID = @"SYCell";
+/// Non-numeric search modes, appended to the ValueType tags in the type cycle.
+static NSString *const kModeHex = @"hex";
+static NSString *const kModeString = @"string";
+static NSString *const kModeRegex = @"regex";
+
+static const NSUInteger kMaxHistoryEntries = 20;
+static const CGFloat kCellIconSize = 14;
 
 @interface SYSearchHandler ()
-@property (nonatomic, strong) NSMutableArray<NSNumber *> *results;
-@property (nonatomic, strong) NSMutableArray<NSMutableDictionary *> *candidates;
 @property (nonatomic, strong) NSMutableArray<NSString *> *history;
-@property (nonatomic, assign) BOOL searching;
 @end
 
-@implementation SYSearchHandler
+@implementation SYSearchHandler {
+    /// Current result set, only ever touched on the main thread. Replaced
+    /// wholesale when a scan finishes rather than mutated in place, so the table
+    /// can never read a half-updated set — the previous code handed the same
+    /// NSMutableDictionary objects to both threads and mutated them from the
+    /// background one.
+    SYScan::Result _result;
+}
+
++ (NSDictionary<NSString *, NSString *> *)tabDescriptor {
+    return @{@"title" : @"Search", @"icon" : @"magnifyingglass"};
+}
 
 - (instancetype)init {
     self = [super init];
     if (self) {
-        _results = [NSMutableArray new];
-        _candidates = [NSMutableArray new];
         _history = [NSMutableArray new];
         _searchType = @"int32";
-        _hasResults = NO;
-        _isNarrowing = NO;
     }
     return self;
 }
 
-#pragma mark - SYTabHandler
+#pragma mark - State-dependent tab metadata
 
-- (NSString *)tabTitle {
-    return @"Search";
-}
-- (NSString *)tabIcon {
-    return @"magnifyingglass";
-}
 - (NSString *)placeholder {
-    return _isNarrowing ? @"New value or leave empty for filter..."
-                        : @"Value, pattern, or string...";
+    return self.isNarrowing ? @"New value, or empty to filter changed…"
+                            : @"Value, pattern, or string…";
 }
+
 - (NSString *)typeLabel {
     return [self shortType];
 }
+
 - (NSString *)actionIcon {
-    return _isNarrowing ? @"line.3.horizontal.decrease" : @"play.fill";
+    return self.isNarrowing ? @"line.3.horizontal.decrease" : @"play.fill";
+}
+
+- (BOOL)hasResults {
+    return _result.count() > 0;
+}
+
+- (BOOL)isNarrowing {
+    // Only typed scans carry snapshots, so only they can be narrowed. Hex,
+    // string and regex results have nothing to compare against.
+    return _result.count() > 0 && _result.narrowable();
+}
+
+#pragma mark - Type selection
+
+- (BOOL)isNumericType {
+    return !([_searchType isEqualToString:kModeHex] || [_searchType isEqualToString:kModeString] ||
+             [_searchType isEqualToString:kModeRegex]);
 }
 
 - (NSString *)shortType {
-    if ([_searchType isEqualToString:@"hex"])
+    if ([_searchType isEqualToString:kModeHex])
         return @"hex";
-    if ([_searchType isEqualToString:@"string"])
+    if ([_searchType isEqualToString:kModeString])
         return @"str";
-    if ([_searchType isEqualToString:@"regex"])
+    if ([_searchType isEqualToString:kModeRegex])
         return @"rex";
     return SYValueTypeUtil::shortLabel(SYValueTypeUtil::fromString(_searchType));
 }
 
-- (void)cycleType {
-    NSArray *types =
-        @[ @"int32", @"int16", @"int64", @"float", @"double", @"hex", @"string", @"regex" ];
-    NSUInteger idx = [types indexOfObject:_searchType];
-    _searchType = types[(idx + 1) % types.count];
+/// Every ValueType plus the three non-numeric modes. Derived from the C++
+/// descriptor table, so adding a type needs no change here — the previous
+/// hardcoded list silently omitted int8 and all the unsigned types.
+- (NSArray<NSString *> *)allSearchTypes {
+    static NSArray<NSString *> *types = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSMutableArray *all = [SYValueTypeUtil::allTags() mutableCopy];
+        [all addObjectsFromArray:@[ kModeHex, kModeString, kModeRegex ]];
+        types = [all copy];
+    });
+    return types;
 }
 
+- (void)cycleType {
+    NSArray<NSString *> *types = [self allSearchTypes];
+    NSUInteger idx = [types indexOfObject:_searchType];
+    if (idx == NSNotFound)
+        idx = 0;
+    self.searchType = types[(idx + 1) % types.count];
+
+    // Snapshots belong to the previous type; keeping them would compare
+    // unrelated bytes on the next narrow.
+    [self clearResults];
+}
+
+#pragma mark - Actions
+
 - (void)performAction:(NSString *)input {
-    if (_isNarrowing) {
-        if (!input.length) {
-            [self narrow:@"changed"];
+    if (self.isNarrowing) {
+        if (input.length == 0) {
+            [self narrowWithFilter:SYNarrowChanged input:nil];
         } else {
-            [self narrowExact:input];
+            [self narrowWithFilter:SYNarrowExact input:input];
         }
         return;
     }
@@ -83,186 +129,194 @@ static NSString *const kCellID = @"SYCell";
 }
 
 - (void)performSearch:(NSString *)input {
-    if (_searching)
+    if (input.length == 0) {
+        [self failWithMessage:@"Enter a value to search for"];
         return;
-    _searching = YES;
-    [_results removeAllObjects];
-    [_candidates removeAllObjects];
-
-    if (input.length && ![_history containsObject:input]) {
-        [_history insertObject:input atIndex:0];
-        if (_history.count > 20)
-            [_history removeLastObject];
     }
 
-    NSString *searchType = _searchType;
+    [self recordHistory:input];
 
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        // SYScanAll is a plain C function — no C++ syntax in this block
-        size_t count = 0, valSize = 4;
-        uintptr_t *hits = SYScanAll([searchType UTF8String], [input UTF8String], kMaxScanResults,
-                                    kMaxRegionSize, &count, &valSize);
+    SYScan::Request request;
+    request.typeTag = [_searchType UTF8String];
+    request.input = [input UTF8String];
+    request.maxResults = kMaxScanResults;
+    request.maxRegionSize = kMaxRegionSize;
 
-        NSMutableArray *localResults = [NSMutableArray arrayWithCapacity:count];
-        NSMutableArray *localCandidates = [NSMutableArray arrayWithCapacity:count];
+    // Heap-allocated so the result survives the hop back to the main queue
+    // without copying a potentially large vector.
+    auto *scanned = new SYScan::Result();
 
-        for (size_t k = 0; k < count; k++) {
-            uintptr_t addr = hits[k];
-            [localResults addObject:@(addr)];
-            NSMutableDictionary *c = [NSMutableDictionary new];
-            c[@"address"] = @(addr);
-            if (valSize > 0) {
-                unsigned char buf[8] = {};
-                SYMemRead(addr, buf, valSize);
-                c[@"snapshot"] = [NSData dataWithBytes:buf length:valSize];
-            }
-            [localCandidates addObject:c];
+    __weak __typeof__(self) weakSelf = self;
+    [self
+        runInBackground:^{
+            *scanned = SYScan::scanAll(request);
         }
-        SYScanFreeResults(hits);
-
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [self.results setArray:localResults];
-            [self.candidates setArray:localCandidates];
-            self.searching = NO;
-            self.hasResults = (count > 0);
-            self.isNarrowing = self.hasResults;
-            NSString *msg = [NSString stringWithFormat:@"%zu results", count];
-            [SYToast show:msg type:count > 0 ? SYToastSuccess : SYToastWarning];
-            [self.viewController reloadTable];
-        });
-    });
+        completion:^{
+            __strong __typeof__(weakSelf) strongSelf = weakSelf;
+            if (strongSelf)
+                [strongSelf adoptResult:*scanned verb:@"results"];
+            delete scanned;
+        }];
 }
 
-- (void)narrow:(NSString *)mode {
-    NSArray *snapshot = [_candidates copy];
-    size_t valSize = [self currentValueSize];
+- (void)narrowWithFilter:(SYNarrowFilter)filter input:(NSString *)input {
+    if (!self.isNarrowing) {
+        [self failWithMessage:@"Run a numeric search first"];
+        return;
+    }
 
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        NSMutableArray *kept = [NSMutableArray new];
+    CompareMode mode = CompareMode::Changed;
+    BOOL needsInput = NO;
+    switch (filter) {
+        case SYNarrowChanged:
+            mode = CompareMode::Changed;
+            break;
+        case SYNarrowUnchanged:
+            mode = CompareMode::Unchanged;
+            break;
+        case SYNarrowIncreased:
+            mode = CompareMode::Increased;
+            break;
+        case SYNarrowDecreased:
+            mode = CompareMode::Decreased;
+            break;
+        case SYNarrowGreaterThan:
+            mode = CompareMode::GreaterThan;
+            needsInput = YES;
+            break;
+        case SYNarrowLessThan:
+            mode = CompareMode::LessThan;
+            needsInput = YES;
+            break;
+        case SYNarrowExact:
+            mode = CompareMode::Exact;
+            needsInput = YES;
+            break;
+    }
 
-        for (NSMutableDictionary *c in snapshot) {
-            uintptr_t addr = [c[@"address"] unsignedLongLongValue];
-            NSData *prev = c[@"snapshot"];
-            if (!prev)
-                continue;
+    if (needsInput && input.length == 0) {
+        [self failWithMessage:@"Enter a value to compare against"];
+        return;
+    }
 
-            uint8_t current[8] = {};
-            if (Memory::read(addr, current, valSize) != Status::Success)
-                continue;
+    SYScan::NarrowRequest request;
+    request.addresses = _result.addresses;
+    request.snapshots = _result.snapshots;
+    request.valueSize = _result.valueSize;
+    request.typeTag = [_searchType UTF8String];
+    request.mode = mode;
+    if (needsInput)
+        request.compareInput = [input UTF8String];
 
-            const uint8_t *prevBytes = (const uint8_t *)prev.bytes;
-            BOOL keep = NO;
-            if ([mode isEqualToString:@"changed"]) {
-                keep = (memcmp(current, prevBytes, valSize) != 0);
-            } else if ([mode isEqualToString:@"unchanged"]) {
-                keep = (memcmp(current, prevBytes, valSize) == 0);
-            } else if ([mode isEqualToString:@"increased"]) {
-                keep = (memcmp(current, prevBytes, valSize) > 0);
-            } else if ([mode isEqualToString:@"decreased"]) {
-                keep = (memcmp(current, prevBytes, valSize) < 0);
-            }
+    auto *narrowed = new SYScan::Result();
 
-            if (keep) {
-                c[@"snapshot"] = [NSData dataWithBytes:current length:valSize];
-                [kept addObject:c];
-            }
+    __weak __typeof__(self) weakSelf = self;
+    [self
+        runInBackground:^{
+            *narrowed = SYScan::narrow(request);
         }
-
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [self.candidates setArray:kept];
-            [self.results removeAllObjects];
-            for (NSDictionary *c in kept)
-                [self.results addObject:c[@"address"]];
-            [SYToast show:[NSString stringWithFormat:@"Narrowed to %lu", (unsigned long)kept.count]
-                     type:SYToastInfo];
-            [self.viewController reloadTable];
-        });
-    });
+        completion:^{
+            __strong __typeof__(weakSelf) strongSelf = weakSelf;
+            if (strongSelf)
+                [strongSelf adoptResult:*narrowed verb:@"remaining"];
+            delete narrowed;
+        }];
 }
 
-- (void)narrowExact:(NSString *)input {
-    size_t valSize = [self currentValueSize];
-    uint8_t targetBuf[8] = {};
-    SYValueTypeUtil::parseValue(input, _searchType, targetBuf);
-    NSData *targetData = [NSData dataWithBytes:targetBuf length:valSize];
+/// Install a finished scan/narrow result and report it.
+- (void)adoptResult:(const SYScan::Result &)incoming verb:(NSString *)verb {
+    if (!incoming.ok()) {
+        [self failWithMessage:@(SYScan::describe(incoming.error).c_str())];
+        return;
+    }
 
-    NSArray *snapshot = [_candidates copy];
+    _result = incoming;
 
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        NSMutableArray *kept = [NSMutableArray new];
-        const void *target = targetData.bytes;
+    const size_t count = _result.count();
+    NSString *message = [NSString stringWithFormat:@"%zu %@", count, verb];
+    // A scan capped at the result limit is reported, rather than silently
+    // presenting a truncated set as if it were complete.
+    if (count >= kMaxScanResults)
+        message =
+            [NSString stringWithFormat:@"%zu %@ (limit reached — narrow further)", count, verb];
 
-        for (NSMutableDictionary *c in snapshot) {
-            uintptr_t addr = [c[@"address"] unsignedLongLongValue];
-            uint8_t current[8] = {};
-            if (Memory::read(addr, current, valSize) != Status::Success)
-                continue;
-            if (memcmp(current, target, valSize) == 0) {
-                c[@"snapshot"] = [NSData dataWithBytes:current length:valSize];
-                [kept addObject:c];
-            }
-        }
-
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [self.candidates setArray:kept];
-            [self.results removeAllObjects];
-            for (NSDictionary *c in kept)
-                [self.results addObject:c[@"address"]];
-            [SYToast show:[NSString stringWithFormat:@"Exact: %lu", (unsigned long)kept.count]
-                     type:SYToastInfo];
-            [self.viewController reloadTable];
-        });
-    });
-}
-
-- (size_t)currentValueSize {
-    if ([_searchType isEqualToString:@"int16"])
-        return 2;
-    if ([_searchType isEqualToString:@"int64"] || [_searchType isEqualToString:@"double"])
-        return 8;
-    return 4;
+    [self finishWithMessage:message type:count > 0 ? SYToastSuccess : SYToastWarning];
 }
 
 - (void)batchModify:(NSString *)value {
-    size_t valSize = [self currentValueSize];
-    uint8_t buf[8] = {};
-    SYValueTypeUtil::parseValue(value, _searchType, buf);
-
-    size_t count = 0;
-    for (NSNumber *addr in _results) {
-        if (Memory::write([addr unsignedLongLongValue], buf, valSize) == Status::Success)
-            count++;
+    if (_result.count() == 0) {
+        [self failWithMessage:@"No results to modify"];
+        return;
     }
-    [SYToast show:[NSString stringWithFormat:@"Modified %zu addresses", count] type:SYToastSuccess];
+    if (![self isNumericType]) {
+        [self failWithMessage:@"Batch modify needs a numeric search type"];
+        return;
+    }
+
+    SYScan::Error error = SYScan::Error::None;
+    const size_t written =
+        SYScan::writeAll(_result.addresses, [_searchType UTF8String], [value UTF8String], error);
+
+    if (error != SYScan::Error::None) {
+        [self failWithMessage:@(SYScan::describe(error).c_str())];
+        return;
+    }
+
+    const size_t total = _result.count();
+    if (written == 0) {
+        [self failWithMessage:@"No addresses could be written"];
+        return;
+    }
+    NSString *message = (written == total)
+                            ? [NSString stringWithFormat:@"Modified %zu addresses", written]
+                            : [NSString stringWithFormat:@"Modified %zu of %zu (%zu failed)",
+                                                         written, total, total - written];
+    [self finishWithMessage:message type:written == total ? SYToastSuccess : SYToastWarning];
+}
+
+- (void)clearResults {
+    _result = SYScan::Result();
 }
 
 - (void)resetSearch {
-    [_results removeAllObjects];
-    [_candidates removeAllObjects];
-    _hasResults = NO;
-    _isNarrowing = NO;
+    [self clearResults];
     [self.viewController reloadTable];
+}
+
+#pragma mark - History
+
+- (void)recordHistory:(NSString *)input {
+    if (input.length == 0)
+        return;
+    [_history removeObject:input];
+    [_history insertObject:input atIndex:0];
+    while (_history.count > kMaxHistoryEntries)
+        [_history removeLastObject];
 }
 
 - (NSArray<NSString *> *)searchHistory {
     return [_history copy];
 }
 
+#pragma mark - Export
+
 - (NSString *)exportResultsAsJSON {
-    if (!_results.count)
+    if (_result.count() == 0)
         return nil;
 
-    NSMutableArray *items = [NSMutableArray arrayWithCapacity:_results.count];
-    for (NSNumber *addrNum in _results) {
-        uintptr_t addr = [addrNum unsignedLongLongValue];
-        uint8_t buf[8] = {};
-        Memory::read(addr, buf, [self currentValueSize]);
-        NSString *val = SYValueTypeUtil::formatValue(buf, _searchType);
-        [items addObject:@{
-            @"address" : [NSString stringWithFormat:@"0x%lX", addr],
-            @"value" : val,
-            @"type" : _searchType
-        }];
+    NSMutableArray *items = [NSMutableArray arrayWithCapacity:_result.count()];
+    for (size_t i = 0; i < _result.count(); i++) {
+        const uintptr_t address = _result.addresses[i];
+        NSMutableDictionary *item = [NSMutableDictionary dictionary];
+        item[@"address"] = SYFormatAddress(address);
+        item[@"type"] = _searchType;
+
+        // Plain format, not the display form: exported values must be
+        // re-parseable, and the display form annotates integers with hex.
+        const uint8_t *snapshot = _result.snapshotAt(i);
+        if (snapshot)
+            item[@"value"] = SYValueTypeUtil::formatValue(snapshot, _searchType);
+        [items addObject:item];
     }
 
     NSError *err = nil;
@@ -272,56 +326,127 @@ static NSString *const kCellID = @"SYCell";
     if (!data || err)
         return nil;
 
-    // Save to Documents/Shirayuki/
     NSArray *paths =
         NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
     NSString *docs = paths.firstObject;
+    if (!docs.length)
+        return nil;
+
     NSString *dir = [docs stringByAppendingPathComponent:@"Shirayuki"];
-    [[NSFileManager defaultManager] createDirectoryAtPath:dir
-                              withIntermediateDirectories:YES
-                                               attributes:nil
-                                                    error:nil];
-    NSTimeInterval ts = [[NSDate date] timeIntervalSince1970];
-    NSString *filename = [NSString stringWithFormat:@"results_%lld.json", (long long)ts];
+    if (![[NSFileManager defaultManager] createDirectoryAtPath:dir
+                                   withIntermediateDirectories:YES
+                                                    attributes:nil
+                                                         error:&err]) {
+        return nil;
+    }
+
+    NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+    formatter.dateFormat = @"yyyyMMdd-HHmmss";
+    NSString *filename =
+        [NSString stringWithFormat:@"results_%@.json", [formatter stringFromDate:[NSDate date]]];
     NSString *path = [dir stringByAppendingPathComponent:filename];
-    [data writeToFile:path atomically:YES];
+
+    // The write result decides the return value: reporting a path for a file
+    // that was never created told the user their export had succeeded.
+    if (![data writeToFile:path atomically:YES])
+        return nil;
     return path;
+}
+
+#pragma mark - Tab hooks
+
+- (BOOL)showsNarrowBar {
+    return self.isNarrowing;
+}
+
+- (BOOL)showsInputHistory {
+    return YES;
+}
+
+- (NSArray<NSString *> *)inputHistory {
+    return [self searchHistory];
+}
+
+- (NSArray<UIAlertAction *> *)actionButtonMenuActions {
+    if (_result.count() == 0)
+        return @[];
+
+    __weak __typeof__(self) weakSelf = self;
+    NSMutableArray<UIAlertAction *> *actions = [NSMutableArray array];
+
+    [actions addObject:[UIAlertAction actionWithTitle:@"Export to JSON"
+                                                style:UIAlertActionStyleDefault
+                                              handler:^(UIAlertAction *a) {
+                                                  [weakSelf exportAndReport];
+                                              }]];
+
+    if ([self isNumericType]) {
+        [actions
+            addObject:[UIAlertAction actionWithTitle:@"Batch Modify"
+                                               style:UIAlertActionStyleDefault
+                                             handler:^(UIAlertAction *a) {
+                                                 [weakSelf.viewController showBatchModifyAlert];
+                                             }]];
+    }
+    return actions;
+}
+
+- (void)exportAndReport {
+    NSString *path = [self exportResultsAsJSON];
+    if (path) {
+        [SYToast show:[NSString stringWithFormat:@"Saved: %@", [path lastPathComponent]]
+                 type:SYToastSuccess];
+    } else {
+        [SYToast show:@"Export failed" type:SYToastError];
+    }
 }
 
 #pragma mark - Table
 
 - (NSInteger)numberOfRows {
-    return _results.count;
+    return (NSInteger)_result.count();
 }
 
-- (UITableViewCell *)cellForRow:(NSInteger)row inTableView:(UITableView *)tableView {
-    SYResultCell *cell =
-        [tableView dequeueReusableCellWithIdentifier:kCellID
-                                        forIndexPath:[NSIndexPath indexPathForRow:row inSection:0]];
+- (void)configureCell:(SYResultCell *)cell forRow:(NSInteger)row {
+    const uintptr_t address = _result.addresses[(size_t)row];
 
-    uintptr_t addr = [_results[row] unsignedLongLongValue];
-    uint8_t buf[8] = {};
-    Memory::read(addr, buf, [self currentValueSize]);
-    NSString *valueStr = SYValueTypeUtil::formatValue(buf, _searchType);
+    NSString *valueStr = @"—";
+    if ([self isNumericType]) {
+        uint8_t buf[kMaxValueSize] = {};
+        const size_t width = SYValueTypeUtil::sizeOfTag(_searchType);
+        // Show the live value, and say so plainly when it can no longer be read
+        // rather than rendering a zeroed buffer as a real value.
+        if (Memory::read(address, buf, width) == Status::Success)
+            valueStr = SYValueTypeUtil::displayValue(buf, _searchType);
+        else
+            valueStr = @"<unreadable>";
+    }
 
-    [cell configureWithIcon:[SYTheme icon:@"memorychip" size:14]
-                      title:[NSString stringWithFormat:@"0x%lX", addr]
+    [cell configureWithIcon:[SYTheme icon:@"memorychip" size:kCellIconSize]
+                      title:SYFormatAddress(address)
                      detail:valueStr
                       badge:[self shortType]
                  badgeColor:[SYTheme accentDim]];
-    return cell;
+}
+
+- (BOOL)canDeleteRow:(NSInteger)row {
+    return NO;
 }
 
 - (void)didSelectRow:(NSInteger)row {
-    uintptr_t addr = [_results[row] unsignedLongLongValue];
-    [self.viewController showModifyAlertForAddress:addr type:_searchType];
+    if (row < 0 || (size_t)row >= _result.count())
+        return;
+    if (![self isNumericType]) {
+        [self copyAddressToClipboard:_result.addresses[(size_t)row]];
+        return;
+    }
+    [self.viewController showModifyAlertForAddress:_result.addresses[(size_t)row] type:_searchType];
 }
 
 - (void)didLongPressRow:(NSInteger)row {
-    uintptr_t addr = [_results[row] unsignedLongLongValue];
-    NSString *addrStr = [NSString stringWithFormat:@"0x%lX", addr];
-    [UIPasteboard generalPasteboard].string = addrStr;
-    [SYToast show:[NSString stringWithFormat:@"Copied %@", addrStr] type:SYToastInfo];
+    if (row < 0 || (size_t)row >= _result.count())
+        return;
+    [self copyAddressToClipboard:_result.addresses[(size_t)row]];
 }
 
 @end

@@ -1,13 +1,17 @@
 #ifndef SHIRAYUKI_MEMORY_HPP
 #define SHIRAYUKI_MEMORY_HPP
 
+#include "ShirayukiConfig.hpp"
+
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <deque>
 #include <functional>
 #include <mach-o/dyld.h>
 #include <mach-o/getsect.h>
 #include <mach/mach.h>
+#include <optional>
 #include <regex>
 #include <string>
 #include <sys/mman.h>
@@ -39,10 +43,14 @@ struct ImageInfo {
 
 // --- Memory region info ---
 struct RegionInfo {
-    std::string label; // e.g. "__DATA", "MALLOC", "STACK"
+    std::string label; // human-readable kind: "MALLOC", "STACK", "__TEXT", ...
     uintptr_t start = 0;
     size_t size = 0;
     vm_prot_t protection = VM_PROT_NONE;
+    // Kernel VM_MEMORY_* allocator tag. This, not the address range, is what
+    // reliably distinguishes heap from stack: on arm64 the entire user address
+    // space sits above 4 GB, so address-threshold heuristics classify nothing.
+    unsigned int userTag = 0;
 
     bool isReadable() const {
         return protection & VM_PROT_READ;
@@ -53,6 +61,8 @@ struct RegionInfo {
     bool isExecutable() const {
         return protection & VM_PROT_EXECUTE;
     }
+    bool isHeap() const;
+    bool isStack() const;
 };
 
 // --- Region filter for scans ---
@@ -70,9 +80,20 @@ namespace Memory {
 Status read(uintptr_t address, void *buffer, size_t len);
 Status write(uintptr_t address, const void *buffer, size_t len);
 
-template <typename T> T readValue(uintptr_t address) {
+// Read a typed value, reporting failure. An unreadable address is otherwise
+// indistinguishable from one that legitimately holds 0 — and a caller that
+// displays that 0 in an editable field will happily write it back, turning a
+// failed read into real memory corruption.
+template <typename T> Status readValue(uintptr_t address, T &out) {
+    return read(address, &out, sizeof(T));
+}
+
+// Convenience form for callers that have already validated the address, or for
+// which a zero on failure is genuinely harmless. Prefer the two-argument form.
+template <typename T> std::optional<T> tryReadValue(uintptr_t address) {
     T val{};
-    read(address, &val, sizeof(T));
+    if (read(address, &val, sizeof(T)) != Status::Success)
+        return std::nullopt;
     return val;
 }
 
@@ -100,10 +121,19 @@ uintptr_t findSymbol(const ImageInfo &img, const std::string &symbolName);
 } // namespace Image
 
 // --- Search value type ---
+// Enumerator order is load-bearing: ValueType.cpp indexes its descriptor table
+// by static_cast<size_t>(type) and static_asserts the count.
 enum class ValueType { Int8, UInt8, Int16, UInt16, Int32, UInt32, Int64, UInt64, Float32, Float64 };
 
 size_t valueTypeSize(ValueType type);
+
+// Compact UI label ("i32", "f64"). For a stable identifier use ValueFormat::toTag.
 std::string valueTypeLabel(ValueType type);
+
+// Typed three-way compare of two same-type raw values: -1, 0 or 1.
+// Comparing the bytes directly instead (memcmp) is wrong on little-endian for
+// every multi-byte type, and for all signed and floating point values.
+int compareValues(const uint8_t *a, const uint8_t *b, ValueType type);
 
 // --- Scanner compare mode (for narrowing) ---
 enum class CompareMode {
@@ -123,16 +153,24 @@ std::vector<uintptr_t> findPattern(uintptr_t start, size_t len, const std::strin
 uintptr_t findPatternFirst(uintptr_t start, size_t len, const std::string &pattern);
 std::vector<uintptr_t> findPatternInImage(const ImageInfo &img, const std::string &pattern);
 
-// Typed value search
+// Find every occurrence of `width` needle bytes in [start, start+len).
+//
+// `stride` is the step between candidate offsets; it defaults to `width`, i.e.
+// only naturally-aligned values are reported, which is what a typed scan wants.
+// Pass 1 for a byte-granular search.
+//
+// Reads a copy of the range through Memory::read rather than dereferencing it.
+// Region lists come from a vm_region snapshot, so by the time a scan runs the
+// host app may already have freed or unmapped the range — a direct load would
+// fault the whole process, where a failed read merely skips that chunk.
+std::vector<uintptr_t> findValueBytes(uintptr_t start, size_t len, const uint8_t *needle,
+                                      size_t width, size_t stride = 0);
+
+// Typed convenience wrapper over findValueBytes.
 template <typename T> std::vector<uintptr_t> findValue(uintptr_t start, size_t len, T value) {
-    std::vector<uintptr_t> results;
-    const uint8_t *buf = reinterpret_cast<const uint8_t *>(start);
-    for (size_t i = 0; i + sizeof(T) <= len; i += sizeof(T)) {
-        if (*reinterpret_cast<const T *>(buf + i) == value) {
-            results.push_back(start + i);
-        }
-    }
-    return results;
+    uint8_t needle[sizeof(T)];
+    memcpy(needle, &value, sizeof(T));
+    return findValueBytes(start, len, needle, sizeof(T));
 }
 
 // String search
@@ -221,20 +259,34 @@ std::string formatInstruction(const Instruction &insn);
 
 // --- Value formatting and parsing ---
 namespace ValueFormat {
-// Format raw bytes as a human-readable string for the given type
+// Format raw bytes as a plain value string, with no decoration. Guaranteed
+// round-trippable: parse(format(buf, t), t, buf2) reproduces buf exactly.
+// Use this for edit fields, session files and JSON export.
 std::string format(const uint8_t *buf, ValueType type);
 
-// Parse a decimal/float string into raw bytes for the given type.
-// Returns number of bytes written (0 on failure).
-size_t parse(const std::string &input, ValueType type, uint8_t buf[8]);
+// Format raw bytes for display in a table cell: integers gain a hex annotation
+// ("42 (0x2A)"), floats use fixed notation. Not parseable — display only.
+std::string formatDisplay(const uint8_t *buf, ValueType type);
 
-// Convert a string type tag ("int32", "float", "double", "int64", "int16",
-// "uint32", "int8", "uint8", "uint16", "uint64") to ValueType.
-// Unknown tags default to Int32.
+// Parse a decimal or 0x-prefixed hexadecimal string into raw bytes for the
+// given type. Returns the number of bytes written, or 0 if the input is empty,
+// malformed, has trailing characters, or is out of range for the type; `buf` is
+// zeroed either way. Never throws — callers pass raw text field contents.
+size_t parse(const std::string &input, ValueType type, uint8_t buf[kMaxValueSize]);
+
+// Resolve a type tag. Both the canonical tag ("int32", "float") and the compact
+// label ("i32", "f32") are accepted, as are the "float32"/"float64" aliases.
+// fromTag falls back to Int32 for unknown tags; use tryFromTag when an
+// unrecognised tag should be reported to the user instead of silently coerced.
+bool tryFromTag(const std::string &tag, ValueType &out);
 ValueType fromTag(const std::string &tag);
 
-// Convert ValueType to its canonical string tag.
+// Canonical, stable string tag for a type ("int32"). Round-trips through
+// fromTag. For the compact UI label use valueTypeLabel.
 std::string toTag(ValueType type);
+
+// Canonical tags of every ValueType, in enumerator order.
+std::vector<std::string> allTags();
 } // namespace ValueFormat
 
 } // namespace Shirayuki

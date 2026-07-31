@@ -1,9 +1,12 @@
-#import "SYTabHandler.h"
-#import <UIKit/UIKit.h>
+#import "SYBaseHandler.h"
 
-@class ShirayukiViewController;
+/// Watch tab: polls addresses in the background and shows each one's
+/// previous → current transition.
+///
+/// Rows live in `WatchManager`, not in the base class's `entries` array, so this
+/// handler snapshots the manager once per table reload.
+@interface SYWatchHandler : SYBaseHandler
 
-@interface SYWatchHandler : NSObject <SYTabHandler>
-@property (nonatomic, weak) ShirayukiViewController *viewController;
 - (void)removeAll;
+
 @end

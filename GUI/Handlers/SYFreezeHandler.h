@@ -1,10 +1,12 @@
-#import "SYTabHandler.h"
-#import <UIKit/UIKit.h>
+#import "SYBaseHandler.h"
 
-@class ShirayukiViewController;
+/// Freeze tab: holds an address at a value, or steps it every tick.
+///
+/// Rows are NSMutableDictionary mirrors of the `FreezeManager` entries, kept in
+/// the base class's `entries` array.
+@interface SYFreezeHandler : SYBaseHandler
 
-@interface SYFreezeHandler : NSObject <SYTabHandler>
-@property (nonatomic, weak) ShirayukiViewController *viewController;
 - (void)removeAll;
 - (void)toggleAutoIncrementForRow:(NSInteger)row;
+
 @end

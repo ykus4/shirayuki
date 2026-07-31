@@ -6,10 +6,12 @@
 #import "Handlers/SYPointerHandler.h"
 #import "Handlers/SYSearchHandler.h"
 #import "Handlers/SYWatchHandler.h"
+#import "SYInput.h"
 #import "SYResultCell.h"
 #import "SYTabHandler.h"
 #import "SYTheme.h"
 #import "SYToast.h"
+#import "SYValueTypeUtil.h"
 #import "Session.hpp"
 #import "ShirayukiMemory.hpp"
 #import "ShirayukiWindow.h"
@@ -134,17 +136,28 @@ static NSString *const kHistoryCellID = @"SYHistoryCell";
     return _handlers[_currentTabIndex];
 }
 
+/// Look a handler up by class rather than by position. The index-based accessors
+/// this replaces were commented "safe against reordering" while being exactly
+/// the opposite: reordering `_handlers` silently repointed every one of them.
+- (id)handlerOfClass:(Class)cls {
+    for (id<SYTabHandler> handler in _handlers) {
+        if ([handler isKindOfClass:cls])
+            return handler;
+    }
+    return nil;
+}
+
 - (SYSearchHandler *)searchHandler {
-    return (SYSearchHandler *)_handlers[0];
+    return [self handlerOfClass:[SYSearchHandler class]];
 }
 - (SYPatchHandler *)patchHandler {
-    return (SYPatchHandler *)_handlers[1];
+    return [self handlerOfClass:[SYPatchHandler class]];
 }
 - (SYFreezeHandler *)freezeHandler {
-    return (SYFreezeHandler *)_handlers[2];
+    return [self handlerOfClass:[SYFreezeHandler class]];
 }
 - (SYWatchHandler *)watchHandler {
-    return (SYWatchHandler *)_handlers[3];
+    return [self handlerOfClass:[SYWatchHandler class]];
 }
 
 #pragma mark - Build UI
@@ -310,12 +323,12 @@ static NSString *const kHistoryCellID = @"SYHistoryCell";
     _narrowBar.hidden = YES;
     [self.view addSubview:_narrowBar];
 
-    NSArray *modes = @[ @"Changed", @"Unchanged", @"Inc", @"Dec", @"Reset" ];
+    NSArray<NSString *> *titles = [self narrowButtonTitles];
     CGFloat x = 0;
 
-    for (NSUInteger i = 0; i < modes.count; i++) {
+    for (NSUInteger i = 0; i < titles.count; i++) {
         UIButton *btn = [UIButton buttonWithType:UIButtonTypeSystem];
-        [btn setTitle:modes[i] forState:UIControlStateNormal];
+        [btn setTitle:titles[i] forState:UIControlStateNormal];
         [btn setTitleColor:[SYTheme textSecondary] forState:UIControlStateNormal];
         btn.titleLabel.font = [UIFont systemFontOfSize:9 weight:UIFontWeightMedium];
         btn.backgroundColor = [SYTheme bgTertiary];
@@ -410,8 +423,9 @@ static NSString *const kHistoryCellID = @"SYHistoryCell";
     [_actionButton setImage:[SYTheme icon:[h actionIcon] size:13 color:[UIColor blackColor]]
                    forState:UIControlStateNormal];
 
-    // Show narrow bar only for search in narrowing mode
-    BOOL showNarrow = (_currentTabIndex == 0 && [self.searchHandler isNarrowing]);
+    BOOL showNarrow = NO;
+    if ([h respondsToSelector:@selector(showsNarrowBar)])
+        showNarrow = [h showsNarrowBar];
     _narrowBar.hidden = !showNarrow;
 
     // Adjust row height
@@ -438,20 +452,26 @@ static NSString *const kHistoryCellID = @"SYHistoryCell";
 }
 
 - (void)typeTapped {
-    if (_currentTabIndex == 0) {
-        [self.searchHandler cycleType];
-        [_typeButton setTitle:[self.searchHandler shortType] forState:UIControlStateNormal];
-        [UIView animateWithDuration:0.12
-            animations:^{
-                self.typeButton.transform = CGAffineTransformMakeScale(1.2, 1.2);
-            }
-            completion:^(BOOL f) {
-                [UIView animateWithDuration:0.08
-                                 animations:^{
-                                     self.typeButton.transform = CGAffineTransformIdentity;
-                                 }];
-            }];
-    }
+    id<SYTabHandler> h = [self currentHandler];
+    if (![h respondsToSelector:@selector(cycleType)])
+        return;
+
+    [h cycleType];
+    [_typeButton setTitle:[h typeLabel] forState:UIControlStateNormal];
+    // The type change can also change the placeholder and narrow-bar visibility.
+    [self updateForCurrentTab:NO];
+    [_tableView reloadData];
+
+    [UIView animateWithDuration:0.12
+        animations:^{
+            self.typeButton.transform = CGAffineTransformMakeScale(1.2, 1.2);
+        }
+        completion:^(BOOL f) {
+            [UIView animateWithDuration:0.08
+                             animations:^{
+                                 self.typeButton.transform = CGAffineTransformIdentity;
+                             }];
+        }];
 }
 
 - (void)actionTapped {
@@ -469,67 +489,30 @@ static NSString *const kHistoryCellID = @"SYHistoryCell";
     if (gesture.state != UIGestureRecognizerStateBegan)
         return;
 
-    // On search tab: offer export + batch modify
-    if (_currentTabIndex == 0 && self.searchHandler.hasResults) {
-        UIAlertController *sheet =
-            [UIAlertController alertControllerWithTitle:@"Search Actions"
-                                                message:nil
-                                         preferredStyle:UIAlertControllerStyleActionSheet];
-
-        [sheet addAction:[UIAlertAction
-                             actionWithTitle:@"Export to JSON"
-                                       style:UIAlertActionStyleDefault
-                                     handler:^(UIAlertAction *a) {
-                                         NSString *path = [self.searchHandler exportResultsAsJSON];
-                                         if (path) {
-                                             NSString *fn = [path lastPathComponent];
-                                             [SYToast
-                                                 show:[NSString stringWithFormat:@"Saved: %@", fn]
-                                                 type:SYToastSuccess];
-                                         } else {
-                                             [SYToast show:@"Export failed" type:SYToastError];
-                                         }
-                                     }]];
-
-        [sheet addAction:[UIAlertAction actionWithTitle:@"Batch Modify"
-                                                  style:UIAlertActionStyleDefault
-                                                handler:^(UIAlertAction *a) {
-                                                    [self showBatchModifyAlert];
-                                                }]];
-
-        [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel"
-                                                  style:UIAlertActionStyleCancel
-                                                handler:nil]];
-        [self presentViewController:sheet animated:YES completion:nil];
+    id<SYTabHandler> h = [self currentHandler];
+    if (![h respondsToSelector:@selector(actionButtonMenuActions)])
         return;
-    }
 
-    // On patch tab: offer undo/redo
-    if (_currentTabIndex == 1) {
-        UIAlertController *sheet =
-            [UIAlertController alertControllerWithTitle:@"Patch Actions"
-                                                message:nil
-                                         preferredStyle:UIAlertControllerStyleActionSheet];
+    [self presentActions:[h actionButtonMenuActions]
+                   title:[NSString stringWithFormat:@"%@ Actions", [h tabTitle]]];
+}
 
-        if ([self.patchHandler canUndo]) {
-            [sheet addAction:[UIAlertAction actionWithTitle:@"Undo"
-                                                      style:UIAlertActionStyleDefault
-                                                    handler:^(UIAlertAction *a) {
-                                                        [self.patchHandler undo];
-                                                    }]];
-        }
-        if ([self.patchHandler canRedo]) {
-            [sheet addAction:[UIAlertAction actionWithTitle:@"Redo"
-                                                      style:UIAlertActionStyleDefault
-                                                    handler:^(UIAlertAction *a) {
-                                                        [self.patchHandler redo];
-                                                    }]];
-        }
-        [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel"
-                                                  style:UIAlertActionStyleCancel
-                                                handler:nil]];
-        [self presentViewController:sheet animated:YES completion:nil];
-    }
+/// Present handler-supplied actions as an action sheet, adding Cancel. Keeps the
+/// per-tab menu contents with the tab instead of in a chain of index checks here.
+- (void)presentActions:(NSArray<UIAlertAction *> *)actions title:(NSString *)title {
+    if (!actions.count)
+        return;
+
+    UIAlertController *sheet =
+        [UIAlertController alertControllerWithTitle:title
+                                            message:nil
+                                     preferredStyle:UIAlertControllerStyleActionSheet];
+    for (UIAlertAction *action in actions)
+        [sheet addAction:action];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel"
+                                              style:UIAlertActionStyleCancel
+                                            handler:nil]];
+    [self presentViewController:sheet animated:YES completion:nil];
 }
 
 - (void)showBatchModifyAlert {
@@ -555,13 +538,71 @@ static NSString *const kHistoryCellID = @"SYHistoryCell";
     [self presentViewController:alert animated:YES completion:nil];
 }
 
-- (void)narrowTapped:(UIButton *)sender {
-    static NSArray *modes = nil;
-    if (!modes)
-        modes = @[ @"changed", @"unchanged", @"increased", @"decreased" ];
+/// Narrow-bar buttons, in tag order. Titles and the filters they map to used to
+/// live in two separate arrays in two separate methods, coupled only by index and
+/// by strings that had to match what the handler compared against.
++ (NSArray<NSDictionary *> *)narrowButtons {
+    static NSArray<NSDictionary *> *buttons = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        buttons = @[
+            @{@"title" : @"Changed",
+              @"filter" : @(SYNarrowChanged)},
+            @{@"title" : @"Unchanged",
+              @"filter" : @(SYNarrowUnchanged)},
+            @{@"title" : @"Inc",
+              @"filter" : @(SYNarrowIncreased)},
+            @{@"title" : @"Dec",
+              @"filter" : @(SYNarrowDecreased)},
+            @{@"title" : @">",
+              @"filter" : @(SYNarrowGreaterThan)},
+            @{@"title" : @"<",
+              @"filter" : @(SYNarrowLessThan)},
+            @{@"title" : @"Reset"}, // no filter — resets the search
+        ];
+    });
+    return buttons;
+}
 
-    if (sender.tag < (NSInteger)modes.count) {
-        [self.searchHandler narrow:modes[sender.tag]];
+- (NSArray<NSString *> *)narrowButtonTitles {
+    NSMutableArray<NSString *> *titles = [NSMutableArray array];
+    for (NSDictionary *b in [[self class] narrowButtons])
+        [titles addObject:b[@"title"]];
+    return titles;
+}
+
+- (void)confirmAction:(NSString *)title
+              message:(NSString *)message
+          confirmVerb:(NSString *)verb
+             onAccept:(void (^)(void))onAccept {
+    if (!onAccept)
+        return;
+
+    UIAlertController *alert =
+        [UIAlertController alertControllerWithTitle:title
+                                            message:message
+                                     preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:verb.length ? verb : @"Confirm"
+                                              style:UIAlertActionStyleDestructive
+                                            handler:^(UIAlertAction *a) {
+                                                onAccept();
+                                            }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
+                                              style:UIAlertActionStyleCancel
+                                            handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)narrowTapped:(UIButton *)sender {
+    NSArray<NSDictionary *> *buttons = [[self class] narrowButtons];
+    if (sender.tag < 0 || (NSUInteger)sender.tag >= buttons.count)
+        return;
+
+    NSNumber *filter = buttons[(NSUInteger)sender.tag][@"filter"];
+    if (filter) {
+        // The comparison filters need a value; the input field supplies it.
+        [self.searchHandler narrowWithFilter:(SYNarrowFilter)filter.integerValue
+                                       input:self.inputField.text];
     } else {
         [self.searchHandler resetSearch];
     }
@@ -570,8 +611,18 @@ static NSString *const kHistoryCellID = @"SYHistoryCell";
 
 #pragma mark - Search history dropdown
 
+/// Inputs the current tab offers as history, or nil when it offers none.
+- (NSArray<NSString *> *)currentInputHistory {
+    id<SYTabHandler> h = [self currentHandler];
+    if (![h respondsToSelector:@selector(showsInputHistory)] || ![h showsInputHistory])
+        return nil;
+    if (![h respondsToSelector:@selector(inputHistory)])
+        return nil;
+    return [h inputHistory];
+}
+
 - (void)showSearchHistory {
-    NSArray *history = [self.searchHandler searchHistory];
+    NSArray<NSString *> *history = [self currentInputHistory];
     if (!history.count)
         return;
 
@@ -601,7 +652,6 @@ static NSString *const kHistoryCellID = @"SYHistoryCell";
     _historyDropdown.translatesAutoresizingMaskIntoConstraints = NO;
     _historyDropdown.delegate = self;
     _historyDropdown.dataSource = self;
-    _historyDropdown.tag = 999; // distinguish from main table
     [_historyDropdown registerClass:[UITableViewCell class] forCellReuseIdentifier:kHistoryCellID];
     [self.view addSubview:_historyDropdown];
 
@@ -656,32 +706,19 @@ static NSString *const kHistoryCellID = @"SYHistoryCell";
     if (!indexPath)
         return;
 
-    // Freeze tab: show auto-increment menu on long press
-    if (_currentTabIndex == 2) {
-        UIAlertController *sheet =
-            [UIAlertController alertControllerWithTitle:@"Freeze Options"
-                                                message:nil
-                                         preferredStyle:UIAlertControllerStyleActionSheet];
-        NSInteger row = indexPath.row;
-        [sheet addAction:[UIAlertAction actionWithTitle:@"Toggle Auto-Increment"
-                                                  style:UIAlertActionStyleDefault
-                                                handler:^(UIAlertAction *a) {
-                                                    [self.freezeHandler
-                                                        toggleAutoIncrementForRow:row];
-                                                }]];
-        [sheet addAction:[UIAlertAction actionWithTitle:@"Copy Address"
-                                                  style:UIAlertActionStyleDefault
-                                                handler:^(UIAlertAction *a) {
-                                                    [self.freezeHandler didLongPressRow:row];
-                                                }]];
-        [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel"
-                                                  style:UIAlertActionStyleCancel
-                                                handler:nil]];
-        [self presentViewController:sheet animated:YES completion:nil];
-        return;
+    id<SYTabHandler> h = [self currentHandler];
+
+    // A tab with a per-row menu supplies the actions itself; the view controller
+    // no longer needs to know that row menus are a freeze-tab thing.
+    if ([h respondsToSelector:@selector(contextActionsForRow:)]) {
+        NSArray<UIAlertAction *> *actions = [h contextActionsForRow:indexPath.row];
+        if (actions.count) {
+            [self presentActions:actions
+                           title:[NSString stringWithFormat:@"%@ Options", [h tabTitle]]];
+            return;
+        }
     }
 
-    id<SYTabHandler> h = [self currentHandler];
     if ([h respondsToSelector:@selector(didLongPressRow:)]) {
         [h didLongPressRow:indexPath.row];
     }
@@ -695,52 +732,60 @@ static NSString *const kHistoryCellID = @"SYHistoryCell";
 }
 
 - (void)showModifyAlertForAddress:(uintptr_t)addr type:(NSString *)type {
-    NSString *currentStr;
-    if ([type isEqualToString:@"float"]) {
-        float v = Memory::readValue<float>(addr);
-        currentStr = [NSString stringWithFormat:@"%.3f", v];
-    } else if ([type isEqualToString:@"double"]) {
-        double v = Memory::readValue<double>(addr);
-        currentStr = [NSString stringWithFormat:@"%.5f", v];
-    } else if ([type isEqualToString:@"int64"]) {
-        int64_t v = Memory::readValue<int64_t>(addr);
-        currentStr = [NSString stringWithFormat:@"%lld", v];
-    } else {
-        int32_t v = Memory::readValue<int32_t>(addr);
-        currentStr = [NSString stringWithFormat:@"%d", v];
+    const size_t valSize = SYValueTypeUtil::sizeOfTag(type);
+
+    // Read first and bail out if it fails. Displaying a zero-filled buffer for an
+    // unreadable address would prefill the edit field with "0", and accepting
+    // that prefill writes a real zero into memory — a failed read turning into
+    // actual corruption.
+    uint8_t buf[kMaxValueSize] = {};
+    if (Memory::read(addr, buf, valSize) != Status::Success) {
+        [SYToast show:[NSString stringWithFormat:@"Cannot read 0x%llX", (unsigned long long)addr]
+                 type:SYToastError];
+        return;
     }
 
+    // Plain (re-parseable) form for the edit field, annotated form for the label.
+    NSString *editStr = SYValueTypeUtil::formatValue(buf, type);
+    NSString *displayStr = SYValueTypeUtil::displayValue(buf, type);
+
     UIAlertController *alert = [UIAlertController
-        alertControllerWithTitle:[NSString stringWithFormat:@"0x%lX", addr]
-                         message:[NSString stringWithFormat:@"Current: %@", currentStr]
+        alertControllerWithTitle:SYFormatAddress(addr)
+                         message:[NSString stringWithFormat:@"Current: %@ (%@)", displayStr, type]
                   preferredStyle:UIAlertControllerStyleAlert];
 
     [alert addTextFieldWithConfigurationHandler:^(UITextField *tf) {
-        tf.text = currentStr;
+        tf.text = editStr;
         tf.font = [SYTheme monoMedium];
-        tf.keyboardType = UIKeyboardTypeDecimalPad;
+        // Not DecimalPad: negative values, hex entry and exponents all need the
+        // full keyboard, and every type is parsed through ValueFormat anyway.
+        tf.keyboardType = UIKeyboardTypeASCIICapable;
+        tf.autocorrectionType = UITextAutocorrectionTypeNo;
+        tf.autocapitalizationType = UITextAutocapitalizationTypeNone;
+        tf.clearButtonMode = UITextFieldViewModeAlways;
     }];
 
-    [alert addAction:[UIAlertAction actionWithTitle:@"Write"
-                                              style:UIAlertActionStyleDefault
-                                            handler:^(UIAlertAction *a) {
-                                                NSString *val = alert.textFields.firstObject.text;
-                                                if ([type isEqualToString:@"float"]) {
-                                                    float v = [val floatValue];
-                                                    Memory::writeValue<float>(addr, v);
-                                                } else if ([type isEqualToString:@"double"]) {
-                                                    double v = [val doubleValue];
-                                                    Memory::writeValue<double>(addr, v);
-                                                } else if ([type isEqualToString:@"int64"]) {
-                                                    int64_t v = [val longLongValue];
-                                                    Memory::writeValue<int64_t>(addr, v);
-                                                } else {
-                                                    int32_t v = [val intValue];
-                                                    Memory::writeValue<int32_t>(addr, v);
-                                                }
-                                                [SYToast show:@"Written" type:SYToastSuccess];
-                                                [self reloadTable];
-                                            }]];
+    [alert
+        addAction:[UIAlertAction
+                      actionWithTitle:@"Write"
+                                style:UIAlertActionStyleDefault
+                              handler:^(UIAlertAction *a) {
+                                  NSString *val = alert.textFields.firstObject.text;
+                                  uint8_t out[kMaxValueSize] = {};
+                                  const size_t n = SYValueTypeUtil::parseValue(val, type, out);
+                                  if (n == 0) {
+                                      [SYToast
+                                          show:[NSString stringWithFormat:@"Invalid %@ value", type]
+                                          type:SYToastError];
+                                      return;
+                                  }
+                                  if (Memory::write(addr, out, n) != Status::Success) {
+                                      [SYToast show:@"Write failed" type:SYToastError];
+                                      return;
+                                  }
+                                  [SYToast show:@"Written" type:SYToastSuccess];
+                                  [self reloadTable];
+                              }]];
 
     [alert addAction:[UIAlertAction actionWithTitle:@"Freeze"
                                               style:UIAlertActionStyleDefault
@@ -768,19 +813,20 @@ static NSString *const kHistoryCellID = @"SYHistoryCell";
 #pragma mark - UITableView
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    if (tableView.tag == 999) {
-        return (NSInteger)[self.searchHandler searchHistory].count;
+    if (tableView == _historyDropdown) {
+        return (NSInteger)[self currentInputHistory].count;
     }
     return [[self currentHandler] numberOfRows];
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
          cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-    if (tableView.tag == 999) {
+    if (tableView == _historyDropdown) {
         UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:kHistoryCellID
                                                                 forIndexPath:indexPath];
-        NSString *entry = [self.searchHandler searchHistory][indexPath.row];
-        cell.textLabel.text = entry;
+        NSArray<NSString *> *history = [self currentInputHistory];
+        cell.textLabel.text =
+            (indexPath.row < (NSInteger)history.count) ? history[indexPath.row] : @"";
         cell.textLabel.font = [SYTheme monoMedium];
         cell.textLabel.textColor = [SYTheme textPrimary];
         cell.backgroundColor = [UIColor clearColor];
@@ -790,9 +836,10 @@ static NSString *const kHistoryCellID = @"SYHistoryCell";
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
-    if (tableView.tag == 999) {
-        NSString *entry = [self.searchHandler searchHistory][indexPath.row];
-        _inputField.text = entry;
+    if (tableView == _historyDropdown) {
+        NSArray<NSString *> *history = [self currentInputHistory];
+        if (indexPath.row < (NSInteger)history.count)
+            _inputField.text = history[indexPath.row];
         [self dismissHistory];
         [_inputField resignFirstResponder];
         return;
@@ -833,9 +880,7 @@ static NSString *const kHistoryCellID = @"SYHistoryCell";
 }
 
 - (void)textFieldDidBeginEditing:(UITextField *)textField {
-    if (_currentTabIndex == 0) {
-        [self showSearchHistory];
-    }
+    [self showSearchHistory];
 }
 
 - (void)textFieldDidEndEditing:(UITextField *)textField {

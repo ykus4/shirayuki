@@ -1,8 +1,7 @@
-#import "SYTabHandler.h"
-#import <UIKit/UIKit.h>
+#import "SYBaseHandler.h"
 
-@class ShirayukiViewController;
-
-@interface SYDumpHandler : NSObject <SYTabHandler>
-@property (nonatomic, weak) ShirayukiViewController *viewController;
+/// Dump tab: hex dump or ARM64 disassembly of an address range, rendered as
+/// table rows rather than into an alert, so a long dump stays scrollable and
+/// individual lines stay tappable.
+@interface SYDumpHandler : SYBaseHandler
 @end

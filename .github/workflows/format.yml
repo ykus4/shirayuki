@@ -22,7 +22,7 @@ jobs:
 
       - name: Check formatting
         run: |
-          find ShirayukiMemory GUI Tweak \
+          find ShirayukiMemory GUI Tweak tests \
             \( -name '*.cpp' -o -name '*.hpp' -o -name '*.mm' \
             -o -name '*.m' -o -name '*.h' \) \
             | xargs clang-format-22 --dry-run --Werror

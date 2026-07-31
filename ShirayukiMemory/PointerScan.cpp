@@ -57,8 +57,8 @@ std::vector<uintptr_t> PointerScanner::findPointersTo(uintptr_t targetAddress, i
         if (region.size < sizeof(uintptr_t))
             continue;
 
-        for (size_t off = 0; off < region.size; off += kPointerScanChunkSize) {
-            size_t readLen = std::min(kPointerScanChunkSize, region.size - off);
+        for (size_t off = 0; off < region.size; off += kScanChunkSize) {
+            size_t readLen = std::min(kScanChunkSize, region.size - off);
             std::vector<uint8_t> buf(readLen);
 
             if (Memory::read(region.start + off, buf.data(), readLen) != Status::Success) {
@@ -118,7 +118,7 @@ static void scanRecursive(ScanContext &ctx, uintptr_t target, std::deque<int64_t
 
         // Check if this pointer is in a known module
         for (auto &img : ctx.images) {
-            if (ptrAddr >= img.base && ptrAddr < img.base + kPointerScanModuleMaxSize) {
+            if (ptrAddr >= img.base && ptrAddr < img.base + kModuleMaxSize) {
                 PointerChain chain;
                 chain.moduleName = img.name;
                 chain.moduleOffset = ptrAddr - img.base;
@@ -151,8 +151,7 @@ std::vector<PointerChain> PointerScanner::scan(const PointerScanConfig &config) 
 
     // Check if target itself is directly in a module
     for (auto &img : images) {
-        if (config.targetAddress >= img.base &&
-            config.targetAddress < img.base + kPointerScanModuleMaxSize) {
+        if (config.targetAddress >= img.base && config.targetAddress < img.base + kModuleMaxSize) {
             PointerChain direct;
             direct.moduleName = img.name;
             direct.moduleOffset = config.targetAddress - img.base;

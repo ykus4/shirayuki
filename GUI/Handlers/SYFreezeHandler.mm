@@ -1,177 +1,282 @@
 #import "SYFreezeHandler.h"
+
 #import "Freeze.hpp"
+#import "SYInput.h"
 #import "SYResultCell.h"
 #import "SYTheme.h"
-#import "SYToast.h"
 #import "SYValueTypeUtil.h"
+#import "ShirayukiConfig.hpp"
 #import "ShirayukiViewController.h"
 
 using namespace Shirayuki;
 
-static NSString *const kCellID = @"SYCell";
+static const CGFloat kCellIconSize = 14;
 
-@interface SYFreezeHandler ()
-@property (nonatomic, strong) NSMutableArray<NSMutableDictionary *> *entries;
-@end
+/// Amount added to the frozen value on every freeze tick when auto-increment is
+/// on. There is no UI to choose a step, and the tick rate is `kFreezeIntervalMs`,
+/// so anything larger than the smallest unit runs away far too fast to be useful.
+static const int64_t kAutoIncrementStep = 1;
+
+/// Type used when the command line omits one.
+static NSString *const kDefaultTypeTag = @"int32";
+
+/// Row keys. Named so a typo is a compile error rather than a silently nil read.
+static NSString *const kKeyID = @"id";
+static NSString *const kKeyAddress = @"address";
+static NSString *const kKeyValue = @"value";
+static NSString *const kKeyType = @"type";
+static NSString *const kKeyActive = @"active";
+static NSString *const kKeyAutoIncrement = @"autoIncrement";
+
+/// What a row is doing, derived once from the (autoIncrement, active) pair.
+///
+/// The cell used to derive its badge text, badge colour, icon name and icon
+/// colour from that pair with four separate nested ternaries — four places to
+/// keep in step for three states, two of which computed the identical colour.
+typedef NS_ENUM(NSInteger, SYFreezeRowState) {
+    SYFreezeRowStatePaused,
+    SYFreezeRowStateFrozen,
+    SYFreezeRowStateIncrementing,
+};
 
 @implementation SYFreezeHandler
 
-- (instancetype)init {
-    self = [super init];
-    if (self) {
-        _entries = [NSMutableArray new];
-    }
-    return self;
++ (NSDictionary<NSString *, NSString *> *)tabDescriptor {
+    return @{
+        @"title" : @"Freeze",
+        @"icon" : @"lock.fill",
+        @"placeholder" : @"0xADDR VALUE [type:i32|f32]",
+        @"typeLabel" : @"frz",
+        @"actionIcon" : @"lock.fill"
+    };
 }
 
-- (NSString *)tabTitle {
-    return @"Freeze";
-}
-- (NSString *)tabIcon {
-    return @"lock.fill";
-}
-- (NSString *)placeholder {
-    return @"0xADDR VALUE [type:i32|f32]";
-}
-- (NSString *)typeLabel {
-    return @"frz";
-}
-- (NSString *)actionIcon {
-    return @"lock.fill";
-}
+#pragma mark - Actions
 
 - (void)performAction:(NSString *)input {
-    NSArray *parts = [input componentsSeparatedByString:@" "];
-    if (parts.count < 2) {
-        [SYToast show:@"Format: 0xADDR VALUE" type:SYToastWarning];
+    SYCommand *command = [SYCommand parse:input minArgs:1];
+    if (!command.ok) {
+        [self failWithMessage:command.error];
         return;
     }
 
-    unsigned long long addr = strtoull([parts[0] UTF8String], NULL, 16);
-    if (!addr) {
-        [SYToast show:@"Invalid address" type:SYToastError];
+    NSString *valueText = [command argAt:0];
+    NSString *typeTag = [command argAt:1 or:kDefaultTypeTag];
+
+    // `tryFromString` takes both short ("f32") and canonical ("float") tags, so
+    // the hand-written translation table is gone. Its two copies had already
+    // diverged — the watch tab's knew "i8" and the freeze tab's did not, and they
+    // fell back differently for anything unknown. Reporting the bad tag beats
+    // freezing four bytes as an int32 the user never asked for.
+    ValueType type = ValueType::Int32;
+    if (!SYValueTypeUtil::tryFromString(typeTag, type)) {
+        [self failWithMessage:[NSString stringWithFormat:@"Unknown type '%@'", typeTag]];
         return;
     }
-    NSString *valStr = parts[1];
-    NSString *typeStr = parts.count > 2 ? parts[2] : @"i32";
+    NSString *canonicalTag = SYValueTypeUtil::canonicalTag(type);
 
-    // Map short type tags (f32/f64/i64/i32) to canonical names for util
-    NSDictionary *typeMap = @{
-        @"f32" : @"float",
-        @"f64" : @"double",
-        @"i64" : @"int64",
-        @"i32" : @"int32",
-        @"i16" : @"int16"
-    };
-    NSString *canonicalType = typeMap[typeStr] ?: typeStr;
-    ValueType vtype = SYValueTypeUtil::fromString(canonicalType);
-    uint8_t buf[8] = {};
-    size_t valSize = SYValueTypeUtil::parseValue(valStr, canonicalType, buf);
-    if (!valSize) {
-        [SYToast show:@"Invalid value" type:SYToastWarning];
+    uint8_t value[kMaxValueSize] = {};
+    const size_t width = SYValueTypeUtil::parseValue(valueText, canonicalTag, value);
+    if (width == 0) {
+        [self failWithMessage:[NSString stringWithFormat:@"'%@' is not a valid %@", valueText,
+                                                         canonicalTag]];
         return;
     }
 
-    auto &fm = FreezeManager::shared();
-    uint64_t fid = fm.add(addr, buf, valSize, vtype, "");
+    auto &manager = FreezeManager::shared();
+    const uint64_t identifier = manager.add(command.address, value, width, type, "");
+    if (identifier == 0) {
+        // Entry IDs start at 1, so zero means the manager refused. Adding the row
+        // regardless left a phantom "FROZEN" line for an address nothing was
+        // holding, and a delete on it would have removed some other entry's ID.
+        [self failWithMessage:@"Could not create freeze entry"];
+        return;
+    }
 
-    if (!fm.isRunning())
-        fm.start(16);
+    if (!manager.isRunning())
+        manager.start(kFreezeIntervalMs);
 
-    NSMutableDictionary *entry = [@{
-        @"id" : @(fid),
-        @"address" : @(addr),
-        @"value" : valStr,
-        @"type" : typeStr,
-        @"active" : @YES
-    } mutableCopy];
-    [_entries addObject:entry];
+    // The stored value is round-tripped through the parser rather than kept as
+    // typed, so the row shows the value actually being written. The stored type
+    // is the canonical tag, not the user's spelling: the cell used to echo
+    // whatever was typed, including tags that had fallen back to int32 and so
+    // labelled a row with a type it was not frozen as.
+    NSMutableDictionary *entry = [NSMutableDictionary dictionary];
+    entry[kKeyID] = @(identifier);
+    entry[kKeyAddress] = @((unsigned long long)command.address);
+    entry[kKeyValue] = SYValueTypeUtil::formatValue(value, canonicalTag);
+    entry[kKeyType] = canonicalTag;
+    entry[kKeyActive] = @YES;
+    entry[kKeyAutoIncrement] = @NO;
+    [self.entries addObject:entry];
 
-    [SYToast show:[NSString stringWithFormat:@"Frozen 0x%llX = %@", addr, valStr]
-             type:SYToastSuccess];
-    [self.viewController reloadTable];
+    [self finishWithMessage:[NSString stringWithFormat:@"Frozen %@ = %@",
+                                                       SYFormatAddress(command.address), valueText]
+                       type:SYToastSuccess];
 }
 
 - (void)removeAll {
     FreezeManager::shared().removeAll();
-    [_entries removeAllObjects];
-    [SYToast show:@"All freezes removed" type:SYToastInfo];
-    [self.viewController reloadTable];
-}
-
-- (NSInteger)numberOfRows {
-    return _entries.count;
-}
-
-- (UITableViewCell *)cellForRow:(NSInteger)row inTableView:(UITableView *)tableView {
-    SYResultCell *cell =
-        [tableView dequeueReusableCellWithIdentifier:kCellID
-                                        forIndexPath:[NSIndexPath indexPathForRow:row inSection:0]];
-
-    NSDictionary *entry = _entries[row];
-    BOOL active = [entry[@"active"] boolValue];
-    BOOL autoInc = [entry[@"autoIncrement"] boolValue];
-
-    NSString *badgeText = autoInc ? @"INC" : (active ? @"FROZEN" : @"PAUSED");
-    UIColor *badgeColor =
-        autoInc ? [SYTheme warning] : (active ? [SYTheme accent] : [SYTheme textMuted]);
-    NSString *icon = autoInc ? @"arrow.up.circle.fill" : (active ? @"lock.fill" : @"lock.open");
-    UIColor *iconColor =
-        autoInc ? [SYTheme warning] : (active ? [SYTheme accent] : [SYTheme textMuted]);
-
-    [cell
-        configureWithIcon:[SYTheme icon:icon size:14 color:iconColor]
-                    title:[NSString
-                              stringWithFormat:@"0x%llX", [entry[@"address"] unsignedLongLongValue]]
-                   detail:[NSString stringWithFormat:@"= %@ (%@)", entry[@"value"], entry[@"type"]]
-                    badge:badgeText
-               badgeColor:badgeColor];
-    return cell;
-}
-
-- (void)didSelectRow:(NSInteger)row {
-    NSMutableDictionary *entry = _entries[row];
-    BOOL active = ![entry[@"active"] boolValue];
-    entry[@"active"] = @(active);
-
-    uint64_t fid = [entry[@"id"] unsignedLongLongValue];
-    FreezeManager::shared().setActive(fid, active);
-
-    UIImpactFeedbackGenerator *haptic =
-        [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
-    [haptic impactOccurred];
-
-    [self.viewController reloadTable];
-}
-
-- (BOOL)canDeleteRow:(NSInteger)row {
-    return YES;
-}
-- (void)deleteRow:(NSInteger)row {
-    uint64_t fid = [_entries[row][@"id"] unsignedLongLongValue];
-    FreezeManager::shared().remove(fid);
-    [_entries removeObjectAtIndex:row];
-}
-
-- (void)didLongPressRow:(NSInteger)row {
-    uintptr_t addr = [_entries[row][@"address"] unsignedLongLongValue];
-    [UIPasteboard generalPasteboard].string =
-        [NSString stringWithFormat:@"0x%lX", (unsigned long)addr];
-    [SYToast show:@"Address copied" type:SYToastInfo];
+    [self.entries removeAllObjects];
+    [self finishWithMessage:@"All freezes removed" type:SYToastInfo];
 }
 
 - (void)toggleAutoIncrementForRow:(NSInteger)row {
-    if (row >= (NSInteger)_entries.count)
+    NSMutableDictionary *entry = [self entryAtRow:row];
+    if (!entry)
         return;
-    NSMutableDictionary *entry = _entries[row];
-    uint64_t fid = [entry[@"id"] unsignedLongLongValue];
-    BOOL current = [entry[@"autoIncrement"] boolValue];
-    BOOL next = !current;
-    entry[@"autoIncrement"] = @(next);
-    FreezeManager::shared().setAutoIncrement(fid, next, 1);
-    NSString *msg = next ? @"Auto-increment ON" : @"Auto-increment OFF";
-    [SYToast show:msg type:next ? SYToastSuccess : SYToastInfo];
+
+    const BOOL enabled = ![entry[kKeyAutoIncrement] boolValue];
+    entry[kKeyAutoIncrement] = @(enabled);
+    FreezeManager::shared().setAutoIncrement([entry[kKeyID] unsignedLongLongValue], enabled,
+                                             kAutoIncrementStep);
+
+    [self finishWithMessage:enabled ? @"Auto-increment ON" : @"Auto-increment OFF"
+                       type:enabled ? SYToastSuccess : SYToastInfo];
+}
+
+#pragma mark - Menus
+
+/// Per-row long-press menu. These actions used to be built inside
+/// ShirayukiViewController behind a `_currentTabIndex == 2` check, which meant
+/// the view controller had to know that row menus were a freeze-tab feature.
+- (NSArray<UIAlertAction *> *)contextActionsForRow:(NSInteger)row {
+    NSMutableDictionary *entry = [self entryAtRow:row];
+    if (!entry)
+        return @[];
+
+    const BOOL incrementing = [entry[kKeyAutoIncrement] boolValue];
+    const BOOL active = [entry[kKeyActive] boolValue];
+    __weak __typeof__(self) weakSelf = self;
+
+    return @[
+        [UIAlertAction
+            actionWithTitle:incrementing ? @"Stop Auto-Increment" : @"Start Auto-Increment"
+                      style:UIAlertActionStyleDefault
+                    handler:^(UIAlertAction *a) {
+                        [weakSelf toggleAutoIncrementForRow:row];
+                    }],
+        [UIAlertAction actionWithTitle:active ? @"Pause" : @"Resume"
+                                 style:UIAlertActionStyleDefault
+                               handler:^(UIAlertAction *a) {
+                                   [weakSelf toggleActiveForRow:row];
+                               }],
+        [UIAlertAction actionWithTitle:@"Copy Address"
+                                 style:UIAlertActionStyleDefault
+                               handler:^(UIAlertAction *a) {
+                                   [weakSelf didLongPressRow:row];
+                               }],
+    ];
+}
+
+/// Action-button long press: bulk operations. `removeAll` previously had no
+/// caller at all, so there was no way to clear the list except row by row.
+- (NSArray<UIAlertAction *> *)actionButtonMenuActions {
+    if (self.entries.count == 0)
+        return @[];
+
+    __weak __typeof__(self) weakSelf = self;
+    return @[
+        [UIAlertAction actionWithTitle:@"Remove All Freezes"
+                                 style:UIAlertActionStyleDestructive
+                               handler:^(UIAlertAction *a) {
+                                   [weakSelf removeAll];
+                               }],
+    ];
+}
+
+/// Pause or resume a single entry. FreezeManager already supported this; nothing
+/// in the UI reached it.
+- (void)toggleActiveForRow:(NSInteger)row {
+    NSMutableDictionary *entry = [self entryAtRow:row];
+    if (!entry)
+        return;
+
+    const BOOL active = ![entry[kKeyActive] boolValue];
+    entry[kKeyActive] = @(active);
+    FreezeManager::shared().setActive([entry[kKeyID] unsignedLongLongValue], active);
+
+    [self finishWithMessage:active ? @"Resumed" : @"Paused"
+                       type:active ? SYToastSuccess : SYToastInfo];
+}
+
+#pragma mark - Rows
+
+/// Bounds-checked row lookup. Every entry point below is driven by a tap or a
+/// gesture whose index can outlive the row it was captured for.
+- (NSMutableDictionary *)entryAtRow:(NSInteger)row {
+    if (row < 0 || (NSUInteger)row >= self.entries.count)
+        return nil;
+    return self.entries[(NSUInteger)row];
+}
+
+/// Precedence matches the ternaries this replaced: auto-increment outranks the
+/// active flag, so a paused auto-increment row still reads INC.
+- (SYFreezeRowState)stateForEntry:(NSDictionary *)entry {
+    if ([entry[kKeyAutoIncrement] boolValue])
+        return SYFreezeRowStateIncrementing;
+    return [entry[kKeyActive] boolValue] ? SYFreezeRowStateFrozen : SYFreezeRowStatePaused;
+}
+
+- (void)configureCell:(SYResultCell *)cell forRow:(NSInteger)row {
+    NSDictionary *entry = [self entryAtRow:row];
+    if (!entry)
+        return;
+
+    NSString *badge;
+    NSString *icon;
+    UIColor *tint;
+    switch ([self stateForEntry:entry]) {
+        case SYFreezeRowStateIncrementing:
+            badge = @"INC";
+            icon = @"arrow.up.circle.fill";
+            tint = [SYTheme warning];
+            break;
+        case SYFreezeRowStateFrozen:
+            badge = @"FROZEN";
+            icon = @"lock.fill";
+            tint = [SYTheme accent];
+            break;
+        case SYFreezeRowStatePaused:
+            badge = @"PAUSED";
+            icon = @"lock.open";
+            tint = [SYTheme textMuted];
+            break;
+    }
+
+    const uintptr_t address = (uintptr_t)[entry[kKeyAddress] unsignedLongLongValue];
+    [cell configureWithIcon:[SYTheme icon:icon size:kCellIconSize color:tint]
+                      title:SYFormatAddress(address)
+                     detail:[NSString
+                                stringWithFormat:@"= %@ (%@)", entry[kKeyValue], entry[kKeyType]]
+                      badge:badge
+                 badgeColor:tint];
+}
+
+- (void)didSelectRow:(NSInteger)row {
+    NSMutableDictionary *entry = [self entryAtRow:row];
+    if (!entry)
+        return;
+
+    const BOOL active = ![entry[kKeyActive] boolValue];
+    entry[kKeyActive] = @(active);
+    FreezeManager::shared().setActive([entry[kKeyID] unsignedLongLongValue], active);
     [self.viewController reloadTable];
+}
+
+- (void)didLongPressRow:(NSInteger)row {
+    NSMutableDictionary *entry = [self entryAtRow:row];
+    if (!entry)
+        return;
+    [self copyAddressToClipboard:(uintptr_t)[entry[kKeyAddress] unsignedLongLongValue]];
+}
+
+- (void)deleteRow:(NSInteger)row {
+    NSMutableDictionary *entry = [self entryAtRow:row];
+    if (!entry)
+        return;
+    FreezeManager::shared().remove([entry[kKeyID] unsignedLongLongValue]);
+    [super deleteRow:row];
 }
 
 @end

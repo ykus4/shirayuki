@@ -1,4 +1,7 @@
 #import "SYPatchHandler.h"
+
+#import "SYInput.h"
+#import "SYPatchStore.h"
 #import "SYResultCell.h"
 #import "SYTheme.h"
 #import "SYToast.h"
@@ -7,294 +10,219 @@
 
 using namespace Shirayuki;
 
-static NSString *const kCellID = @"SYCell";
+static const CGFloat kCellIconSize = 14;
 
 @interface SYPatchHandler ()
-@property (nonatomic, strong) NSMutableArray<NSMutableDictionary *> *patches;
-// Each undo item targets a stable patch id so row deletion/reordering cannot affect it.
-@property (nonatomic, strong) NSMutableArray<NSDictionary *> *undoStack;
-@property (nonatomic, strong) NSMutableArray<NSDictionary *> *redoStack;
-@property (nonatomic, assign) NSUInteger nextPatchId;
+@property (nonatomic, strong) SYPatchStore *store;
 @end
 
 @implementation SYPatchHandler
 
++ (NSDictionary<NSString *, NSString *> *)tabDescriptor {
+    return @{
+        @"title" : @"Patch",
+        @"icon" : @"wrench.and.screwdriver",
+        @"placeholder" : @"0xADDR HEXBYTES [label]",
+        @"typeLabel" : @"hex",
+        @"actionIcon" : @"hammer.fill",
+    };
+}
+
 - (instancetype)init {
     self = [super init];
     if (self) {
-        _patches = [NSMutableArray new];
-        _undoStack = [NSMutableArray new];
-        _redoStack = [NSMutableArray new];
-        _nextPatchId = 1;
+        _store = [[SYPatchStore alloc] init];
     }
     return self;
 }
 
-- (NSInteger)indexForPatchId:(NSNumber *)patchId {
-    for (NSUInteger i = 0; i < _patches.count; i++) {
-        if ([_patches[i][@"id"] isEqualToNumber:patchId])
-            return (NSInteger)i;
-    }
-    return -1;
-}
-
 - (NSArray<NSDictionary *> *)allPatches {
-    return [_patches copy];
+    return [_store serializedEntries];
 }
 
-- (NSString *)tabTitle {
-    return @"Patch";
-}
-- (NSString *)tabIcon {
-    return @"wrench.and.screwdriver";
-}
-- (NSString *)placeholder {
-    return @"0xADDR HEXBYTES [label]";
-}
-- (NSString *)typeLabel {
-    return @"hex";
-}
-- (NSString *)actionIcon {
-    return @"hammer.fill";
+#pragma mark - Input
+
+/// Split the arguments into hex bytes and an optional trailing label.
+///
+/// The previous version walked the tokens with a hand-rolled classifier that
+/// treated any token of length <= 2 made of hex digits as bytes and everything
+/// else as the label. It contained a provably dead inner `if` (guarded by
+/// `!hexStr.length` yet testing `hexStr.length`), and it mistook short labels
+/// like "AB" for bytes. Deciding by whether the whole remaining run parses as hex
+/// removes the ambiguity.
+- (void)splitArgs:(NSArray<NSString *> *)args
+          intoHex:(NSString **)outHex
+            label:(NSString **)outLabel {
+    NSUInteger hexCount = 0;
+    while (hexCount < args.count && Hex::isValid([args[hexCount] UTF8String]))
+        hexCount++;
+
+    NSArray *hexTokens = [args subarrayWithRange:NSMakeRange(0, hexCount)];
+    NSArray *labelTokens = [args subarrayWithRange:NSMakeRange(hexCount, args.count - hexCount)];
+
+    *outHex = [hexTokens componentsJoinedByString:@" "];
+    *outLabel = [labelTokens componentsJoinedByString:@" "];
 }
 
 - (void)performAction:(NSString *)input {
-    NSArray *parts = [input componentsSeparatedByString:@" "];
-    if (parts.count < 2) {
-        [SYToast show:@"Format: 0xADDR HEX [label]" type:SYToastWarning];
+    SYCommand *cmd = [SYCommand parse:input minArgs:1];
+    if (!cmd.ok) {
+        [self failWithMessage:cmd.error ?: @"Format: 0xADDR HEX [label]"];
         return;
     }
 
-    unsigned long long addr = strtoull([parts[0] UTF8String], NULL, 16);
-    if (!addr) {
-        [SYToast show:@"Invalid address" type:SYToastError];
+    NSString *hex = nil, *label = nil;
+    [self splitArgs:cmd.args intoHex:&hex label:&label];
+    if (hex.length == 0) {
+        [self failWithMessage:@"Format: 0xADDR HEX [label]"];
         return;
     }
 
-    NSMutableString *hexStr = [NSMutableString new];
-    NSString *label = @"";
-
-    for (NSUInteger i = 1; i < parts.count; i++) {
-        NSString *part = parts[i];
-        // Check if it looks like hex
-        if (part.length <= 2 &&
-            [[NSCharacterSet characterSetWithCharactersInString:@"0123456789ABCDEFabcdef"]
-                isSupersetOfSet:[NSCharacterSet characterSetWithCharactersInString:part]]) {
-            if (hexStr.length)
-                [hexStr appendString:@" "];
-            [hexStr appendString:part];
-        } else if (!hexStr.length) {
-            if (hexStr.length)
-                [hexStr appendString:@" "];
-            [hexStr appendString:part];
-        } else {
-            // Rest is label
-            NSArray *remaining = [parts subarrayWithRange:NSMakeRange(i, parts.count - i)];
-            label = [remaining componentsJoinedByString:@" "];
-            break;
-        }
+    NSString *error = nil;
+    SYPatchEntry *entry = [_store applyPatchAtAddress:cmd.address hex:hex label:label error:&error];
+    if (!entry) {
+        [self failWithMessage:error ?: @"Patch failed"];
+        return;
     }
 
-    auto patch = Patch::createWithHex((uintptr_t)addr, [hexStr UTF8String]);
-    if (patch.isValid() && patch.apply()) {
-        NSMutableDictionary *entry = [@{
-            @"id" : @(_nextPatchId++),
-            @"address" : @(addr),
-            @"hex" : hexStr,
-            @"original" : @(patch.originalHex().c_str()),
-            @"label" : label,
-            @"applied" : @YES
-        } mutableCopy];
-        [_patches addObject:entry];
-        // Record undo: "remove the last entry"
-        [_undoStack addObject:@{
-            @"action" : @"remove",
-            @"id" : entry[@"id"],
-            @"index" : @(_patches.count - 1)
-        }];
-        [_redoStack removeAllObjects];
-        [SYToast show:[NSString stringWithFormat:@"Patched 0x%llX", addr] type:SYToastSuccess];
-    } else {
-        [SYToast show:@"Patch failed" type:SYToastError];
-    }
-    [self.viewController reloadTable];
+    [self
+        finishWithMessage:[NSString stringWithFormat:@"Patched %@", SYFormatAddress(entry.address)]
+                     type:SYToastSuccess];
 }
+
+#pragma mark - Bulk operations
 
 - (void)restoreAll {
-    for (NSMutableDictionary *entry in _patches) {
-        if ([entry[@"applied"] boolValue]) {
-            uintptr_t addr = [entry[@"address"] unsignedLongLongValue];
-            auto bytes = Hex::toBytes([entry[@"original"] UTF8String]);
-            if (!bytes.empty()) {
-                Memory::write(addr, bytes.data(), bytes.size());
-            }
-            entry[@"applied"] = @NO;
-        }
+    NSUInteger failed = 0;
+    const NSUInteger restored = [_store restoreAllWithFailureCount:&failed];
+
+    if (restored == 0 && failed == 0) {
+        [self finishWithMessage:@"No patches to restore" type:SYToastInfo];
+        return;
     }
-    [SYToast show:@"All patches restored" type:SYToastSuccess];
-    [self.viewController reloadTable];
+    if (failed > 0) {
+        [self finishWithMessage:[NSString stringWithFormat:@"Restored %lu, %lu failed",
+                                                           (unsigned long)restored,
+                                                           (unsigned long)failed]
+                           type:SYToastWarning];
+        return;
+    }
+    [self finishWithMessage:[NSString
+                                stringWithFormat:@"Restored %lu patches", (unsigned long)restored]
+                       type:SYToastSuccess];
 }
+
+#pragma mark - Undo / redo
+
+- (BOOL)canUndo {
+    return _store.canUndo;
+}
+
+- (BOOL)canRedo {
+    return _store.canRedo;
+}
+
+- (void)undo {
+    NSString *error = nil;
+    NSString *description = [_store undoWithError:&error];
+    if (!description) {
+        // Only claim something happened when it did.
+        [self finishWithMessage:error ?: @"Nothing to undo" type:SYToastWarning];
+        return;
+    }
+    [self finishWithMessage:description type:SYToastInfo];
+}
+
+- (void)redo {
+    NSString *error = nil;
+    NSString *description = [_store redoWithError:&error];
+    if (!description) {
+        [self finishWithMessage:error ?: @"Nothing to redo" type:SYToastWarning];
+        return;
+    }
+    [self finishWithMessage:description type:SYToastSuccess];
+}
+
+#pragma mark - Menus
+
+- (NSArray<UIAlertAction *> *)actionButtonMenuActions {
+    NSMutableArray<UIAlertAction *> *actions = [NSMutableArray array];
+    __weak __typeof__(self) weakSelf = self;
+
+    if (_store.canUndo) {
+        [actions addObject:[UIAlertAction actionWithTitle:@"Undo"
+                                                    style:UIAlertActionStyleDefault
+                                                  handler:^(UIAlertAction *a) {
+                                                      [weakSelf undo];
+                                                  }]];
+    }
+    if (_store.canRedo) {
+        [actions addObject:[UIAlertAction actionWithTitle:@"Redo"
+                                                    style:UIAlertActionStyleDefault
+                                                  handler:^(UIAlertAction *a) {
+                                                      [weakSelf redo];
+                                                  }]];
+    }
+    if (_store.entries.count) {
+        [actions addObject:[UIAlertAction actionWithTitle:@"Restore All"
+                                                    style:UIAlertActionStyleDestructive
+                                                  handler:^(UIAlertAction *a) {
+                                                      [weakSelf restoreAll];
+                                                  }]];
+    }
+    return actions;
+}
+
+#pragma mark - Table
 
 - (NSInteger)numberOfRows {
-    return _patches.count;
+    return (NSInteger)_store.entries.count;
 }
 
-- (UITableViewCell *)cellForRow:(NSInteger)row inTableView:(UITableView *)tableView {
-    SYResultCell *cell =
-        [tableView dequeueReusableCellWithIdentifier:kCellID
-                                        forIndexPath:[NSIndexPath indexPathForRow:row inSection:0]];
-
-    NSDictionary *entry = _patches[row];
-    BOOL applied = [entry[@"applied"] boolValue];
-    NSString *lbl =
-        [entry[@"label"] length]
-            ? entry[@"label"]
-            : [NSString stringWithFormat:@"0x%llX", [entry[@"address"] unsignedLongLongValue]];
+- (void)configureCell:(SYResultCell *)cell forRow:(NSInteger)row {
+    SYPatchEntry *entry = _store.entries[(NSUInteger)row];
+    const BOOL applied = entry.applied;
+    UIColor *stateColor = applied ? [SYTheme success] : [SYTheme textMuted];
 
     [cell
-        configureWithIcon:[SYTheme icon:@"wrench.fill"
-                                   size:14
-                                  color:applied ? [SYTheme success] : [SYTheme textMuted]]
-                    title:lbl
-                   detail:[NSString stringWithFormat:@"%@ → %@", entry[@"original"], entry[@"hex"]]
+        configureWithIcon:[SYTheme icon:@"wrench.fill" size:kCellIconSize color:stateColor]
+                    title:[entry displayName]
+                   detail:[NSString stringWithFormat:@"%@ → %@", entry.originalHex, entry.patchHex]
                     badge:applied ? @"ON" : @"OFF"
-               badgeColor:applied ? [SYTheme success] : [SYTheme textMuted]];
-    return cell;
+               badgeColor:stateColor];
 }
 
 - (void)didSelectRow:(NSInteger)row {
-    NSMutableDictionary *entry = _patches[row];
-    BOOL applied = [entry[@"applied"] boolValue];
-    uintptr_t addr = [entry[@"address"] unsignedLongLongValue];
+    if (row < 0 || (NSUInteger)row >= _store.entries.count)
+        return;
 
-    if (applied) {
-        auto bytes = Hex::toBytes([entry[@"original"] UTF8String]);
-        Memory::write(addr, bytes.data(), bytes.size());
-        entry[@"applied"] = @NO;
-        [_undoStack addObject:@{@"action" : @"reapply", @"id" : entry[@"id"], @"index" : @(row)}];
-        [_redoStack removeAllObjects];
-        [SYToast show:@"Restored" type:SYToastInfo];
-    } else {
-        auto bytes = Hex::toBytes([entry[@"hex"] UTF8String]);
-        Memory::write(addr, bytes.data(), bytes.size());
-        entry[@"applied"] = @YES;
-        [_undoStack addObject:@{@"action" : @"restore", @"id" : entry[@"id"], @"index" : @(row)}];
-        [_redoStack removeAllObjects];
-        [SYToast show:@"Re-applied" type:SYToastSuccess];
+    NSString *error = nil;
+    if (![_store togglePatchAtIndex:(NSUInteger)row error:&error]) {
+        [self failWithMessage:error ?: @"Toggle failed"];
+        return;
     }
-    [self.viewController reloadTable];
+    const BOOL applied = _store.entries[(NSUInteger)row].applied;
+    [self finishWithMessage:applied ? @"Re-applied" : @"Restored"
+                       type:applied ? SYToastSuccess : SYToastInfo];
+}
+
+- (void)didLongPressRow:(NSInteger)row {
+    if (row < 0 || (NSUInteger)row >= _store.entries.count)
+        return;
+    [self copyAddressToClipboard:_store.entries[(NSUInteger)row].address];
 }
 
 - (BOOL)canDeleteRow:(NSInteger)row {
     return YES;
 }
+
 - (void)deleteRow:(NSInteger)row {
-    // Restore before removing
-    NSMutableDictionary *entry = _patches[row];
-    if ([entry[@"applied"] boolValue]) {
-        uintptr_t addr = [entry[@"address"] unsignedLongLongValue];
-        auto bytes = Hex::toBytes([entry[@"original"] UTF8String]);
-        Memory::write(addr, bytes.data(), bytes.size());
-    }
-    [_patches removeObjectAtIndex:row];
-}
-
-- (void)didLongPressRow:(NSInteger)row {
-    uintptr_t addr = [_patches[row][@"address"] unsignedLongLongValue];
-    [UIPasteboard generalPasteboard].string =
-        [NSString stringWithFormat:@"0x%lX", (unsigned long)addr];
-    [SYToast show:@"Address copied" type:SYToastInfo];
-}
-
-- (BOOL)canUndo {
-    return _undoStack.count > 0;
-}
-- (BOOL)canRedo {
-    return _redoStack.count > 0;
-}
-
-- (void)undo {
-    if (!_undoStack.count)
+    if (row < 0 || (NSUInteger)row >= _store.entries.count)
         return;
-    NSDictionary *item = _undoStack.lastObject;
-    [_undoStack removeLastObject];
 
-    NSString *action = item[@"action"];
-    NSNumber *patchId = item[@"id"];
-    NSInteger idx = [self indexForPatchId:patchId];
-
-    if ([action isEqualToString:@"remove"] && idx >= 0) {
-        // Undo an apply: restore original bytes and remove entry
-        NSMutableDictionary *entry = _patches[idx];
-        uintptr_t addr = [entry[@"address"] unsignedLongLongValue];
-        auto bytes = Hex::toBytes([entry[@"original"] UTF8String]);
-        Memory::write(addr, bytes.data(), bytes.size());
-        [_redoStack addObject:@{@"action" : @"readd", @"entry" : entry, @"index" : @(idx)}];
-        [_patches removeObjectAtIndex:idx];
-    } else if ([action isEqualToString:@"restore"] && idx >= 0) {
-        // Undo a re-apply: restore original
-        NSMutableDictionary *entry = _patches[idx];
-        uintptr_t addr = [entry[@"address"] unsignedLongLongValue];
-        auto bytes = Hex::toBytes([entry[@"original"] UTF8String]);
-        Memory::write(addr, bytes.data(), bytes.size());
-        entry[@"applied"] = @NO;
-        [_redoStack addObject:@{@"action" : @"reapply", @"id" : patchId, @"index" : @(idx)}];
-    } else if ([action isEqualToString:@"reapply"] && idx >= 0) {
-        // Undo a restore: re-apply patch
-        NSMutableDictionary *entry = _patches[idx];
-        uintptr_t addr = [entry[@"address"] unsignedLongLongValue];
-        auto bytes = Hex::toBytes([entry[@"hex"] UTF8String]);
-        Memory::write(addr, bytes.data(), bytes.size());
-        entry[@"applied"] = @YES;
-        [_redoStack addObject:@{@"action" : @"restore", @"id" : patchId, @"index" : @(idx)}];
-    }
-
-    [SYToast show:@"Undone" type:SYToastInfo];
-    [self.viewController reloadTable];
-}
-
-- (void)redo {
-    if (!_redoStack.count)
-        return;
-    NSDictionary *item = _redoStack.lastObject;
-    [_redoStack removeLastObject];
-
-    NSString *action = item[@"action"];
-
-    if ([action isEqualToString:@"readd"]) {
-        // Redo an apply: re-apply and re-insert
-        NSMutableDictionary *entry = [item[@"entry"] mutableCopy];
-        uintptr_t addr = [entry[@"address"] unsignedLongLongValue];
-        auto bytes = Hex::toBytes([entry[@"hex"] UTF8String]);
-        Memory::write(addr, bytes.data(), bytes.size());
-        entry[@"applied"] = @YES;
-        NSUInteger idx = MIN([item[@"index"] unsignedIntegerValue], _patches.count);
-        [_patches insertObject:entry atIndex:idx];
-        [_undoStack addObject:@{@"action" : @"remove", @"id" : entry[@"id"], @"index" : @(idx)}];
-    } else if ([action isEqualToString:@"reapply"]) {
-        NSInteger idx = [self indexForPatchId:item[@"id"]];
-        if (idx < 0)
-            return;
-        NSMutableDictionary *entry = _patches[idx];
-        uintptr_t addr = [entry[@"address"] unsignedLongLongValue];
-        auto bytes = Hex::toBytes([entry[@"hex"] UTF8String]);
-        Memory::write(addr, bytes.data(), bytes.size());
-        entry[@"applied"] = @YES;
-        [_undoStack addObject:@{@"action" : @"restore", @"id" : item[@"id"], @"index" : @(idx)}];
-    } else if ([action isEqualToString:@"restore"]) {
-        NSInteger idx = [self indexForPatchId:item[@"id"]];
-        if (idx < 0)
-            return;
-        NSMutableDictionary *entry = _patches[idx];
-        uintptr_t addr = [entry[@"address"] unsignedLongLongValue];
-        auto bytes = Hex::toBytes([entry[@"original"] UTF8String]);
-        Memory::write(addr, bytes.data(), bytes.size());
-        entry[@"applied"] = @NO;
-        [_undoStack addObject:@{@"action" : @"reapply", @"id" : item[@"id"], @"index" : @(idx)}];
-    }
-
-    [SYToast show:@"Redone" type:SYToastSuccess];
-    [self.viewController reloadTable];
+    NSString *error = nil;
+    if (![_store removePatchAtIndex:(NSUInteger)row error:&error])
+        [self failWithMessage:error ?: @"Could not restore original bytes"];
 }
 
 @end
