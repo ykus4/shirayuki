@@ -17,9 +17,25 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+// The free functions below are defined in SYInput.m, which is compiled as plain
+// Objective-C. Without this, an ObjC++ caller mangles the call as
+// `SYFormatAddress(unsigned long)` while the definition exports the C symbol
+// `_SYFormatAddress`, and the link fails. `-fsyntax-only` does not catch it.
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /// Canonical address rendering. Previously spelled three different ways
 /// (`0x%lX`, `0x%llX`, `0x%lX` with an explicit cast) across ten call sites.
 NSString *SYFormatAddress(uintptr_t address);
+
+/// Parse a standalone hexadecimal address. Returns NO on any malformed input,
+/// including the empty string and values with trailing characters.
+BOOL SYParseAddress(NSString *_Nullable text, uintptr_t *outAddress);
+
+#ifdef __cplusplus
+} // extern "C"
+#endif
 
 /// A parsed "<address> [arg...]" handler command line.
 @interface SYCommand : NSObject
@@ -54,9 +70,5 @@ NSString *SYFormatAddress(uintptr_t address);
                       max:(NSInteger)maxValue;
 
 @end
-
-/// Parse a standalone hexadecimal address. Returns NO on any malformed input,
-/// including the empty string and values with trailing characters.
-BOOL SYParseAddress(NSString *_Nullable text, uintptr_t *outAddress);
 
 NS_ASSUME_NONNULL_END
