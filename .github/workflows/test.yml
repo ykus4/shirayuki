@@ -13,7 +13,7 @@ jobs:
   core-tests:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Build and run core tests
         run: make test
@@ -24,7 +24,7 @@ jobs:
   ios-syntax:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Type-check GUI sources against iPhoneOS SDK
         run: make syntax-check
