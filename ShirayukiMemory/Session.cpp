@@ -125,6 +125,24 @@ PointerChain decodePointerChain(const Json::Value &v) {
     return c;
 }
 
+template <typename T> Json::Value encodeArray(const std::vector<T> &items) {
+    Json::Array values;
+    values.reserve(items.size());
+    for (const auto &item : items)
+        values.push_back(encode(item));
+    return Json::Value(std::move(values));
+}
+
+template <typename T>
+std::vector<T> decodeArray(const Json::Value &value, T (*decode)(const Json::Value &)) {
+    const auto &values = value.asArray();
+    std::vector<T> items;
+    items.reserve(values.size());
+    for (const auto &entry : values)
+        items.push_back(decode(entry));
+    return items;
+}
+
 /// Create `path` and any missing parents. `save` used to write straight to a
 /// path whose directory was only created as a side effect of calling
 /// defaultDirectory(), so saving to any other location silently failed.
@@ -171,25 +189,10 @@ bool SessionManager::save(const Session &session, const std::string &filePath) {
     // Format version, so a future change can migrate instead of misreading.
     root["version"] = Json::Value(1);
 
-    Json::Array bookmarks;
-    for (const auto &b : session.bookmarks)
-        bookmarks.push_back(encode(b));
-    root["bookmarks"] = Json::Value(std::move(bookmarks));
-
-    Json::Array freezes;
-    for (const auto &f : session.freezeEntries)
-        freezes.push_back(encode(f));
-    root["freezeEntries"] = Json::Value(std::move(freezes));
-
-    Json::Array patches;
-    for (const auto &p : session.patches)
-        patches.push_back(encode(p));
-    root["patches"] = Json::Value(std::move(patches));
-
-    Json::Array chains;
-    for (const auto &c : session.pointerChains)
-        chains.push_back(encode(c));
-    root["pointerChains"] = Json::Value(std::move(chains));
+    root["bookmarks"] = encodeArray(session.bookmarks);
+    root["freezeEntries"] = encodeArray(session.freezeEntries);
+    root["patches"] = encodeArray(session.patches);
+    root["pointerChains"] = encodeArray(session.pointerChains);
 
     Json::Array history;
     for (const auto &h : session.searchHistory)
@@ -237,14 +240,10 @@ bool SessionManager::load(const std::string &filePath, Session &outSession) {
     session.name = root["name"].asString();
     session.targetBundle = root["targetBundle"].asString();
 
-    for (const auto &v : root["bookmarks"].asArray())
-        session.bookmarks.push_back(decodeBookmark(v));
-    for (const auto &v : root["freezeEntries"].asArray())
-        session.freezeEntries.push_back(decodeFreezeEntry(v));
-    for (const auto &v : root["patches"].asArray())
-        session.patches.push_back(decodePatchRecord(v));
-    for (const auto &v : root["pointerChains"].asArray())
-        session.pointerChains.push_back(decodePointerChain(v));
+    session.bookmarks = decodeArray(root["bookmarks"], decodeBookmark);
+    session.freezeEntries = decodeArray(root["freezeEntries"], decodeFreezeEntry);
+    session.patches = decodeArray(root["patches"], decodePatchRecord);
+    session.pointerChains = decodeArray(root["pointerChains"], decodePointerChain);
     for (const auto &v : root["searchHistory"].asArray())
         session.searchHistory.push_back(v.asString());
 
