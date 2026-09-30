@@ -43,11 +43,10 @@ static NSString *const kHistoryCellID = @"SYHistoryCell";
 @property (nonatomic, strong) NSArray<id<SYTabHandler>> *handlers;
 @property (nonatomic, assign) NSInteger currentTabIndex;
 
-// Typed handler accessors — safe against reordering
-@property (nonatomic, readonly) SYSearchHandler *searchHandler;
-@property (nonatomic, readonly) SYPatchHandler *patchHandler;
-@property (nonatomic, readonly) SYFreezeHandler *freezeHandler;
-@property (nonatomic, readonly) SYWatchHandler *watchHandler;
+@property (nonatomic, strong) SYSearchHandler *searchHandler;
+@property (nonatomic, strong) SYPatchHandler *patchHandler;
+@property (nonatomic, strong) SYFreezeHandler *freezeHandler;
+@property (nonatomic, strong) SYWatchHandler *watchHandler;
 @end
 
 @implementation ShirayukiViewController
@@ -117,14 +116,14 @@ static NSString *const kHistoryCellID = @"SYHistoryCell";
 }
 
 - (void)setupHandlers {
-    SYSearchHandler *search = [SYSearchHandler new];
-    search.viewController = self;
-    SYPatchHandler *patch = [SYPatchHandler new];
-    patch.viewController = self;
-    SYFreezeHandler *freeze = [SYFreezeHandler new];
-    freeze.viewController = self;
-    SYWatchHandler *watch = [SYWatchHandler new];
-    watch.viewController = self;
+    _searchHandler = [SYSearchHandler new];
+    _searchHandler.viewController = self;
+    _patchHandler = [SYPatchHandler new];
+    _patchHandler.viewController = self;
+    _freezeHandler = [SYFreezeHandler new];
+    _freezeHandler.viewController = self;
+    _watchHandler = [SYWatchHandler new];
+    _watchHandler.viewController = self;
     SYPointerHandler *ptr = [SYPointerHandler new];
     ptr.viewController = self;
     SYDumpHandler *dump = [SYDumpHandler new];
@@ -134,25 +133,13 @@ static NSString *const kHistoryCellID = @"SYHistoryCell";
     SYModuleHandler *mod = [SYModuleHandler new];
     mod.viewController = self;
 
-    _handlers = @[ search, patch, freeze, watch, ptr, dump, thr, mod ];
-    _currentTabIndex = 0;
+    _handlers =
+        @[ _searchHandler, _patchHandler, _freezeHandler, _watchHandler, ptr, dump, thr, mod ];
+    _currentTabIndex = [_handlers indexOfObject:_searchHandler];
 }
 
 - (id<SYTabHandler>)currentHandler {
     return _handlers[_currentTabIndex];
-}
-
-- (SYSearchHandler *)searchHandler {
-    return (SYSearchHandler *)_handlers[0];
-}
-- (SYPatchHandler *)patchHandler {
-    return (SYPatchHandler *)_handlers[1];
-}
-- (SYFreezeHandler *)freezeHandler {
-    return (SYFreezeHandler *)_handlers[2];
-}
-- (SYWatchHandler *)watchHandler {
-    return (SYWatchHandler *)_handlers[3];
 }
 
 #pragma mark - Build UI
@@ -419,7 +406,7 @@ static NSString *const kHistoryCellID = @"SYHistoryCell";
                    forState:UIControlStateNormal];
 
     // Show narrow bar only for search in narrowing mode
-    BOOL showNarrow = (_currentTabIndex == 0 && [self.searchHandler isNarrowing]);
+    BOOL showNarrow = (h == self.searchHandler && [self.searchHandler isNarrowing]);
     _narrowBar.hidden = !showNarrow;
 
     // Adjust row height
@@ -446,7 +433,7 @@ static NSString *const kHistoryCellID = @"SYHistoryCell";
 }
 
 - (void)typeTapped {
-    if (_currentTabIndex == 0) {
+    if ([self currentHandler] == self.searchHandler) {
         [self.searchHandler cycleType];
         [_typeButton setTitle:[self.searchHandler shortType] forState:UIControlStateNormal];
         [UIView animateWithDuration:0.12
@@ -478,7 +465,7 @@ static NSString *const kHistoryCellID = @"SYHistoryCell";
         return;
 
     // On search tab: offer export + batch modify
-    if (_currentTabIndex == 0 && self.searchHandler.hasResults) {
+    if ([self currentHandler] == self.searchHandler && self.searchHandler.hasResults) {
         UIAlertController *sheet =
             [UIAlertController alertControllerWithTitle:@"Search Actions"
                                                 message:nil
@@ -513,7 +500,7 @@ static NSString *const kHistoryCellID = @"SYHistoryCell";
     }
 
     // On patch tab: offer undo/redo
-    if (_currentTabIndex == 1) {
+    if ([self currentHandler] == self.patchHandler) {
         UIAlertController *sheet =
             [UIAlertController alertControllerWithTitle:@"Patch Actions"
                                                 message:nil
@@ -609,7 +596,6 @@ static NSString *const kHistoryCellID = @"SYHistoryCell";
     _historyDropdown.translatesAutoresizingMaskIntoConstraints = NO;
     _historyDropdown.delegate = self;
     _historyDropdown.dataSource = self;
-    _historyDropdown.tag = 999; // distinguish from main table
     [_historyDropdown registerClass:[UITableViewCell class] forCellReuseIdentifier:kHistoryCellID];
     [self.view addSubview:_historyDropdown];
 
@@ -665,7 +651,7 @@ static NSString *const kHistoryCellID = @"SYHistoryCell";
         return;
 
     // Freeze tab: show auto-increment menu on long press
-    if (_currentTabIndex == 2) {
+    if ([self currentHandler] == self.freezeHandler) {
         UIAlertController *sheet =
             [UIAlertController alertControllerWithTitle:@"Freeze Options"
                                                 message:nil
@@ -785,7 +771,7 @@ static NSString *const kHistoryCellID = @"SYHistoryCell";
 #pragma mark - UITableView
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    if (tableView.tag == 999) {
+    if (tableView == _historyDropdown) {
         return (NSInteger)[self.searchHandler searchHistory].count;
     }
     return [[self currentHandler] numberOfRows];
@@ -793,7 +779,7 @@ static NSString *const kHistoryCellID = @"SYHistoryCell";
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
          cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-    if (tableView.tag == 999) {
+    if (tableView == _historyDropdown) {
         UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:kHistoryCellID
                                                                 forIndexPath:indexPath];
         NSString *entry = [self.searchHandler searchHistory][indexPath.row];
@@ -807,7 +793,7 @@ static NSString *const kHistoryCellID = @"SYHistoryCell";
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
-    if (tableView.tag == 999) {
+    if (tableView == _historyDropdown) {
         NSString *entry = [self.searchHandler searchHistory][indexPath.row];
         _inputField.text = entry;
         [self dismissHistory];
@@ -850,7 +836,7 @@ static NSString *const kHistoryCellID = @"SYHistoryCell";
 }
 
 - (void)textFieldDidBeginEditing:(UITextField *)textField {
-    if (_currentTabIndex == 0) {
+    if ([self currentHandler] == self.searchHandler) {
         [self showSearchHistory];
     }
 }

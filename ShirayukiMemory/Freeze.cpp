@@ -1,8 +1,69 @@
 #include "Freeze.hpp"
+#include <algorithm>
 #include <chrono>
+#include <cstring>
 #include <optional>
 
 namespace Shirayuki {
+namespace {
+
+struct TriggeredCallback {
+    std::function<void(uint64_t, uintptr_t)> callback;
+    uint64_t id;
+    uintptr_t address;
+};
+
+bool conditionMatches(const FreezeEntry &entry, const std::vector<uint8_t> &current) {
+    // Numeric comparisons need a complete typed value on both sides.
+    const size_t typeWidth = valueTypeSize(entry.type);
+    const bool thresholdUsable = entry.threshold.size() >= typeWidth && current.size() >= typeWidth;
+
+    switch (entry.condition) {
+        case CompareMode::GreaterThan:
+            return thresholdUsable &&
+                   compareTypedBytes(current.data(), entry.threshold.data(), entry.type) > 0;
+        case CompareMode::LessThan:
+            return thresholdUsable &&
+                   compareTypedBytes(current.data(), entry.threshold.data(), entry.type) < 0;
+        case CompareMode::Unchanged:
+            return current == entry.value;
+        case CompareMode::Changed:
+            return current != entry.value;
+        case CompareMode::Exact:
+        case CompareMode::Increased:
+        case CompareMode::Decreased:
+            // These modes have no prior sample or useful freeze threshold.
+            return true;
+    }
+    return false;
+}
+
+template <typename T>
+void incrementStoredValue(FreezeEntry &entry, const std::vector<uint8_t> &current) {
+    T value;
+    std::memcpy(&value, current.data(), sizeof(value));
+    value += static_cast<T>(entry.incrementStep);
+    std::memcpy(entry.value.data(), &value, sizeof(value));
+}
+
+void incrementStoredValue(FreezeEntry &entry, const std::vector<uint8_t> &current) {
+    switch (current.size()) {
+        case 1:
+            incrementStoredValue<int8_t>(entry, current);
+            break;
+        case 2:
+            incrementStoredValue<int16_t>(entry, current);
+            break;
+        case 4:
+            incrementStoredValue<int32_t>(entry, current);
+            break;
+        case 8:
+            incrementStoredValue<int64_t>(entry, current);
+            break;
+    }
+}
+
+} // namespace
 
 FreezeManager &FreezeManager::shared() {
     // Deliberately leaked. A function-local static would be destroyed via
@@ -150,9 +211,7 @@ void FreezeManager::stop() {
 void FreezeManager::loop() {
     while (!m_stopRequested.load()) {
         // Collect triggered callbacks outside the lock to avoid deadlock
-        std::vector<
-            std::pair<std::function<void(uint64_t, uintptr_t)>, std::pair<uint64_t, uintptr_t>>>
-            pendingCallbacks;
+        std::vector<TriggeredCallback> pendingCallbacks;
 
         {
             std::lock_guard<std::mutex> lock(m_mutex);
@@ -166,77 +225,19 @@ void FreezeManager::loop() {
                     if (Memory::read(entry.address, current.data(), sz) != Status::Success)
                         continue;
 
-                    // Threshold comparisons go through compareTypedBytes, which
-                    // orders numerically. memcmp compares the low byte first on
-                    // little-endian ARM64, so a bytewise ">" is wrong for every
-                    // multi-byte type and for all signed and float values — the
-                    // same bug that was fixed for narrowing.
-                    const size_t typeWidth = valueTypeSize(entry.type);
-                    const bool thresholdUsable =
-                        entry.threshold.size() >= typeWidth && sz >= typeWidth;
-
-                    bool shouldWrite = false;
-                    switch (entry.condition) {
-                        case CompareMode::GreaterThan:
-                            shouldWrite = thresholdUsable &&
-                                          compareTypedBytes(current.data(), entry.threshold.data(),
-                                                            entry.type) > 0;
-                            break;
-                        case CompareMode::LessThan:
-                            shouldWrite = thresholdUsable &&
-                                          compareTypedBytes(current.data(), entry.threshold.data(),
-                                                            entry.type) < 0;
-                            break;
-                        case CompareMode::Unchanged:
-                            shouldWrite = (current == entry.value);
-                            break;
-                        case CompareMode::Changed:
-                            shouldWrite = (current != entry.value);
-                            break;
-                        case CompareMode::Exact:
-                        case CompareMode::Increased:
-                        case CompareMode::Decreased:
-                            // Not meaningful as a freeze trigger: there is no
-                            // prior sample to compare against here.
-                            shouldWrite = true;
-                            break;
-                    }
-
-                    if (shouldWrite) {
+                    if (conditionMatches(entry, current)) {
                         Memory::write(entry.address, entry.value.data(), entry.value.size());
                         if (entry.onTriggered) {
                             pendingCallbacks.push_back(
-                                {entry.onTriggered, {entry.id, entry.address}});
+                                {entry.onTriggered, entry.id, entry.address});
                         }
                     }
                 } else if (entry.autoIncrement) {
-                    // Read current value, add step, write back and update stored value
+                    // Read current value, add step, write back and update stored value.
                     size_t sz = entry.value.size();
                     std::vector<uint8_t> current(sz);
                     if (Memory::read(entry.address, current.data(), sz) == Status::Success) {
-                        // Perform signed integer addition on raw bytes (little-endian)
-                        int64_t step = entry.incrementStep;
-                        if (sz == 1) {
-                            int8_t v;
-                            memcpy(&v, current.data(), 1);
-                            v += (int8_t)step;
-                            memcpy(entry.value.data(), &v, 1);
-                        } else if (sz == 2) {
-                            int16_t v;
-                            memcpy(&v, current.data(), 2);
-                            v += (int16_t)step;
-                            memcpy(entry.value.data(), &v, 2);
-                        } else if (sz == 4) {
-                            int32_t v;
-                            memcpy(&v, current.data(), 4);
-                            v += (int32_t)step;
-                            memcpy(entry.value.data(), &v, 4);
-                        } else if (sz == 8) {
-                            int64_t v;
-                            memcpy(&v, current.data(), 8);
-                            v += step;
-                            memcpy(entry.value.data(), &v, 8);
-                        }
+                        incrementStoredValue(entry, current);
                         Memory::write(entry.address, entry.value.data(), sz);
                     }
                 } else {
@@ -246,8 +247,8 @@ void FreezeManager::loop() {
         }
 
         // Invoke callbacks after releasing lock
-        for (auto &[cb, args] : pendingCallbacks) {
-            cb(args.first, args.second);
+        for (const auto &pending : pendingCallbacks) {
+            pending.callback(pending.id, pending.address);
         }
 
         // Wait on the stop flag rather than sleeping, so stop() and setInterval()
